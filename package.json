@@ -1,11 +1,13 @@
 {
-  "name": "tilda-gpt",
+  "name": "tilda-gpt-assistant",
   "version": "1.0.0",
+  "main": "api/chat.js",
   "dependencies": {
-    "openai": "^4.0.0",
-    "express": "^4.18.2"
+    "openai": "^4.33.0",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=18.x"
   }
 }
