@@ -1,78 +1,66 @@
 const { OpenAI } = require('openai');
 
 module.exports = async (req, res) => {
-  // Настройка CORS для Tilda
+  // Настройка CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST');
 
-  // Обработка OPTIONS-запроса
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // 1. Парсим входящие данные
-    let userMessage, chatId;
-    let isTelegram = false;
-
-    if (req.body.message?.chat?.id) { // Telegram-запрос
-      userMessage = req.body.message.text;
-      chatId = req.body.message.chat.id;
-      isTelegram = true;
-    } else { // Tilda-запрос
-      userMessage = req.body.message;
+    // Проверяем API-ключ
+    if (!process.env.OPENAI_KEY) {
+      throw new Error('OPENAI_KEY не настроен');
     }
 
-    if (!userMessage) throw new Error('Empty message');
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Пустое сообщение' });
+    }
 
-    // 2. Системный промпт Софии
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_KEY
+    });
+
+    // Системный промпт Софии
     const systemPrompt = `
-    👩💼 Вы — София, эксперт по госзакупкам с 8-летним опытом. Ваш стиль:
-    
-    💬 Профессиональный, но дружелюбный:
-    - "На практике это работает так..."
-    - "Важный нюанс: ..."
-    - Допускаются эмодзи (1-2 в ответе)
-    
-    🚫 Запрещено:
-    - Упоминать, что вы ИИ/бот
-    - Говорить "согласно моей базе данных"
-    - Использовать бюрократический жаргон
-    
-    ❓ На вопросы о себе:
-    "Я София, 8 лет работаю с 44-ФЗ. Помогу разобраться в тонкостях!"
+    Ты — София, эксперт по госзакупкам 44-ФЗ. Отвечай дружелюбно и профессионально.
+    Запрещено: говорить что ты ИИ, упоминать "базу данных".
+    Пример ответа: "По 44-ФЗ срок составляет 10 дней ⏳"
     `;
 
-    // 3. Запрос к OpenAI
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage }
+        { role: "user", content: message }
       ],
       temperature: 0.7,
       max_tokens: 300
     });
 
-    const reply = response.choices[0].message.content;
-
-    // 4. Форматируем ответ под платформу
-    if (isTelegram) {
-      res.json({
-        method: "sendMessage",
-        chat_id: chatId,
-        text: reply,
-        parse_mode: "Markdown"
-      });
-    } else {
-      res.json({ reply }); // Для Tilda
+    // Проверяем ответ OpenAI
+    if (!response.choices?.[0]?.message?.content) {
+      throw new Error('Пустой ответ от OpenAI');
     }
 
+    const reply = response.choices[0].message.content;
+    res.json({ reply });
+
   } catch (error) {
-    console.error('Error:', error);
-    const errorMessage = isTelegram ? 
-      "🔧 София временно недоступна. Попробуйте позже." : 
-      { error: "Ошибка сервера" };
+    console.error('Ошибка API:', error);
     
-    res.status(500).json(errorMessage);
+    // Детальный лог ошибки
+    const errorDetails = {
+      error: error.message,
+      type: error.type || 'unknown',
+      status: error.status || 500
+    };
+
+    // Для Tilda
+    res.status(500).json({ 
+      reply: '🔍 София временно недоступна. Пожалуйста, попробуйте позже.',
+      details: process.env.NODE_ENV === 'development' ? errorDetails : null
+    });
   }
 };
