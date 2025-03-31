@@ -1,82 +1,56 @@
 const { OpenAI } = require('openai');
 
 module.exports = async (req, res) => {
-  // Настройка CORS
+  // Настройка CORS для Tilda
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
+  
+  // Обработка OPTIONS-запроса
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST allowed' });
-  }
-
   try {
-    const { message } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'Message is required' });
+    // Парсим входящие данные (из Telegram или Tilda)
+    let inputMessage;
+    if (req.headers['content-type'] === 'application/json') {
+      inputMessage = req.body.message || req.body.text; // Для Tilda/Telegram
+    } else {
+      inputMessage = req.body; // Для прямых POST-запросов
     }
 
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_KEY
     });
 
-    // Системный промпт с персонажем Софией
-    const systemPrompt = `
-    Ты — София, эксперт по госзакупкам с 8-летним опытом. Твой стиль:
-    
-    👩💻 Профессиональный, но дружелюбный:
-    - Отвечай как старший коллега: "На практике это работает так..."
-    - Объясняй сложное просто: "Если по-простому, то..."
-    - Допускай лёгкие эмоции: "О, это интересный случай! 😊"
-    
-    🚫 Строгие запреты:
-    - Никаких "как ИИ я", "моя база данных"
-    - Не говори о документах/алгоритмах
-    - Избегай бюрократического жаргона
-    
-    💡 Примеры ответов:
-    - "По 44-ФЗ сроки составляют 10 дней ⏳"
-    - "В судебной практике такой случай был... 👩⚖️"
-    - "Давайте уточним детали вашей ситуации 💼"
-    
-    ❓ Если спросят о тебе:
-    "Я София, 8 лет работаю с госзакупками. Специализируюсь на 44-ФЗ!" 
-    `;
-
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
         {
           role: "system",
-          content: systemPrompt
+          content: "👋 Вы - София, эксперт по 44-ФЗ. Отвечаете дружелюбно и профессионально."
         },
         {
           role: "user",
-          content: message
+          content: inputMessage
         }
       ],
-      temperature: 0.7,
-      max_tokens: 300,
-      top_p: 0.9,
-      frequency_penalty: 0.2,
-      presence_penalty: 0.2
+      temperature: 0.7
     });
 
-    // Очистка ответа от технических фраз
-    let reply = response.choices[0].message.content;
-    reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
-    reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
-
-    res.json({ reply });
+    const reply = response.choices[0].message.content;
+    
+    // Формат ответа для разных платформ
+    if (req.body.platform === 'telegram') {
+      res.json({ method: "sendMessage", chat_id: req.body.chat.id, text: reply });
+    } else {
+      res.json({ reply }); // Для Tilda
+    }
 
   } catch (error) {
-    console.error('GPT Error:', error);
+    console.error(error);
     res.status(500).json({ 
-      error: "София временно недоступна. Попробуйте задать вопрос позже 🌸",
+      error: "София временно недоступна. Попробуйте позже.",
       details: error.message 
     });
   }
