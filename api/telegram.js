@@ -5,9 +5,10 @@ const TelegramBot = require('node-telegram-bot-api');
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_KEY;
 
-// Инициализация бота (вебхук, как у тебя было)
+// Инициализация бота (вебхук или поллинг)
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
+// Системный промпт Софии (такой же как в Tilda)
 const systemPrompt = `
 Ты — София, эксперт по госзакупкам 44-ФЗ с 8-летним опытом. 
 Стиль общения: профессиональный, но дружелюбный. 
@@ -15,51 +16,38 @@ const systemPrompt = `
 Пример ответа: "По 44-ФЗ это регулируется статьёй 24 ⏳"
 `;
 
-// 🔁 Хранилище сессий (в оперативной памяти, на время жизни инстанса Vercel)
-const sessionHistory = {};
-
+// Обработчик сообщений
 bot.on('message', async (msg) => {
   try {
     const chatId = msg.chat.id;
     const userMessage = msg.text;
 
+    // Пропускаем служебные сообщения
     if (!userMessage || userMessage.startsWith('/')) return;
 
     const openai = new OpenAI({ apiKey: OPENAI_KEY });
-
-    // Инициализация истории
-    if (!sessionHistory[chatId]) {
-      sessionHistory[chatId] = [
-        { role: 'system', content: systemPrompt }
-      ];
-    }
-
-    // Добавляем сообщение пользователя
-    sessionHistory[chatId].push({ role: 'user', content: userMessage });
-
-    // Последние 10 сообщений
-    const recentMessages = sessionHistory[chatId].slice(-10);
-
+    
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
-      messages: recentMessages,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ],
       temperature: 0.7
     });
 
-    const reply = response.choices[0].message.content;
-
-    // Добавляем ответ в историю
-    sessionHistory[chatId].push({ role: 'assistant', content: reply });
-
-    await bot.sendMessage(chatId, reply);
+    await bot.sendMessage(chatId, response.choices[0].message.content);
 
   } catch (error) {
     console.error('Telegram bot error:', error);
-    await bot.sendMessage(msg.chat.id, '🔍 София временно недоступна. Попробуйте позже.');
+    await bot.sendMessage(
+      msg.chat.id, 
+      '🔍 София временно недоступна. Попробуйте позже.'
+    );
   }
 });
 
-// 📡 Экспорт для Vercel (webhook)
+// Экспорт для Vercel
 module.exports = async (req, res) => {
   if (req.method === 'POST') {
     bot.processUpdate(req.body);
