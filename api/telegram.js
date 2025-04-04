@@ -1,58 +1,63 @@
 const { OpenAI } = require('openai');
 const TelegramBot = require('node-telegram-bot-api');
 
-// Конфигурация
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_KEY;
 
-// Инициализация бота (вебхук или поллинг)
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
-
-// Системный промпт Софии (такой же как в Tilda)
 const systemPrompt = `
 Ты — София, эксперт по госзакупкам 44-ФЗ с 8-летним опытом. 
 Стиль общения: профессиональный, но дружелюбный. 
-Запрещено: упоминать что ты ИИ, говорить "база данных".
-Пример ответа: "По 44-ФЗ это регулируется статьёй 24 ⏳"
+Запрещено: упоминать, что ты ИИ или используешь базу данных.
 `;
 
-// Обработчик сообщений
-bot.on('message', async (msg) => {
+// Псевдо-память (на время инстанса)
+const sessions = {};
+
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).end();
+    return;
+  }
+
+  const message = req.body?.message;
+  if (!message || !message.text || message.text.startsWith('/')) {
+    res.status(200).end();
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const userMessage = message.text;
+
+  const openai = new OpenAI({ apiKey: OPENAI_KEY });
+
+  // Инициализируем сессию
+  if (!sessions[chatId]) {
+    sessions[chatId] = [{ role: 'system', content: systemPrompt }];
+  }
+
+  // Добавляем сообщение
+  sessions[chatId].push({ role: 'user', content: userMessage });
+
+  const recentMessages = sessions[chatId].slice(-10); // Ограничим контекст
+
   try {
-    const chatId = msg.chat.id;
-    const userMessage = msg.text;
-
-    // Пропускаем служебные сообщения
-    if (!userMessage || userMessage.startsWith('/')) return;
-
-    const openai = new OpenAI({ apiKey: OPENAI_KEY });
-    
     const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage }
-      ],
-      temperature: 0.7
+      model: 'gpt-3.5-turbo',
+      messages: recentMessages,
+      temperature: 0.7,
     });
 
-    await bot.sendMessage(chatId, response.choices[0].message.content);
+    const reply = response.choices[0].message.content;
+    sessions[chatId].push({ role: 'assistant', content: reply });
 
-  } catch (error) {
-    console.error('Telegram bot error:', error);
-    await bot.sendMessage(
-      msg.chat.id, 
-      '🔍 София временно недоступна. Попробуйте позже.'
-    );
-  }
-});
+    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    await bot.sendMessage(chatId, reply);
 
-// Экспорт для Vercel
-module.exports = async (req, res) => {
-  if (req.method === 'POST') {
-    bot.processUpdate(req.body);
     res.status(200).end();
-  } else {
-    res.status(405).end();
+  } catch (err) {
+    console.error('Ошибка GPT:', err);
+    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    await bot.sendMessage(chatId, '⚠️ София временно недоступна. Попробуйте позже.');
+    res.status(200).end();
   }
 };
