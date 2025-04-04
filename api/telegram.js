@@ -1,11 +1,8 @@
 const { OpenAI } = require('openai');
 const TelegramBot = require('node-telegram-bot-api');
 
-// Конфигурация
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_KEY;
-
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
 const systemPrompt = `
 Ты — София, эксперт по госзакупкам 44-ФЗ с 8-летним опытом. 
@@ -14,58 +11,57 @@ const systemPrompt = `
 Пример ответа: "По 44-ФЗ это регулируется статьёй 24 ⏳"
 `;
 
-// Память чатов (хранится в памяти сервера, до перезапуска)
-const sessionHistory = {};
+// Псевдо-память (в пределах одного запуска)
+const sessions = {};
 
-bot.on('message', async (msg) => {
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).end();
+    return;
+  }
+
+  const body = req.body;
+  const message = body.message;
+  if (!message || !message.text || message.text.startsWith('/')) {
+    res.status(200).end();
+    return;
+  }
+
+  const chatId = message.chat.id;
+  const userMessage = message.text;
+
+  // Создаём или дополняем историю
+  if (!sessions[chatId]) {
+    sessions[chatId] = [
+      { role: 'system', content: systemPrompt }
+    ];
+  }
+
+  sessions[chatId].push({ role: 'user', content: userMessage });
+
+  // Обрезаем до последних 10
+  const history = sessions[chatId].slice(-10);
+
+  const openai = new OpenAI({ apiKey: OPENAI_KEY });
+
   try {
-    const chatId = msg.chat.id;
-    const userMessage = msg.text;
-
-    if (!userMessage || userMessage.startsWith('/')) return;
-
-    const openai = new OpenAI({ apiKey: OPENAI_KEY });
-
-    // Инициализация истории, если её нет
-    if (!sessionHistory[chatId]) {
-      sessionHistory[chatId] = [
-        { role: 'system', content: systemPrompt }
-      ];
-    }
-
-    // Добавляем сообщение пользователя
-    sessionHistory[chatId].push({ role: 'user', content: userMessage });
-
-    // Обрезаем историю, если она слишком длинная (например, 10 сообщений)
-    const MAX_HISTORY = 10;
-    const recentHistory = sessionHistory[chatId].slice(-MAX_HISTORY);
-
-    // Получаем ответ от GPT
     const response = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
-      messages: recentHistory,
+      messages: history,
       temperature: 0.7
     });
 
     const reply = response.choices[0].message.content;
+    sessions[chatId].push({ role: 'assistant', content: reply });
 
-    // Добавляем ответ в историю
-    sessionHistory[chatId].push({ role: 'assistant', content: reply });
-
+    const bot = new TelegramBot(TELEGRAM_TOKEN);
     await bot.sendMessage(chatId, reply);
-
-  } catch (error) {
-    console.error('Telegram bot error:', error);
-    await bot.sendMessage(msg.chat.id, '🔍 София временно недоступна. Попробуйте позже.');
-  }
-});
-
-// Экспорт для Vercel
-module.exports = async (req, res) => {
-  if (req.method === 'POST') {
-    bot.processUpdate(req.body);
     res.status(200).end();
-  } else {
-    res.status(405).end();
+
+  } catch (err) {
+    console.error('Ошибка обработки запроса:', err);
+    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    await bot.sendMessage(chatId, '🛠 София временно недоступна. Попробуйте позже.');
+    res.status(500).end();
   }
 };
