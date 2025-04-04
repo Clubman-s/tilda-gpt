@@ -8,7 +8,7 @@ const OPENAI_KEY = process.env.OPENAI_KEY;
 // Инициализация бота (вебхук или поллинг)
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
-// Системный промпт Софии (такой же как в Tilda)
+// Системный промпт Софии
 const systemPrompt = `
 Ты — София, эксперт по госзакупкам 44-ФЗ с 8-летним опытом. 
 Стиль общения: профессиональный, но дружелюбный. 
