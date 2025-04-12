@@ -1,9 +1,7 @@
-import { createServer } from 'http';
-import { Readable } from 'stream';
+import formidable from 'formidable';
 import fs from 'fs';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
-import formidable from 'formidable';
 import { createClient } from '@supabase/supabase-js';
 
 export const config = {
@@ -17,7 +15,7 @@ const supabase = createClient(
 
 // Новый способ создания form
 const parseForm = async (req) => {
-  const form = formidable();
+  const form = new formidable.IncomingForm();
   return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
       if (err) reject(err);
@@ -36,7 +34,10 @@ export default async function handler(req, res) {
     const file = files.file;
 
     console.log('📥 Получен файл:', file?.originalFilename || 'нет имени');
-    if (!file) return res.status(400).json({ error: 'Файл не получен' });
+    if (!file || !file.originalFilename) {
+      console.error("❌ Файл не был загружен или его имя отсутствует.");
+      return res.status(400).json({ error: "Файл не был получен" });
+    }
 
     const ext = file.originalFilename.split('.').pop().toLowerCase();
     let text = '';
