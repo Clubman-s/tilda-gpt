@@ -1,70 +1,71 @@
+import formidable from 'formidable';
+import fs from 'fs';
+import pdfParse from 'pdf-parse';
 import { OpenAI } from 'openai';
 import { createClient } from '@supabase/supabase-js';
-import pdfParse from 'pdf-parse';
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 export const config = {
-  api: {
-    bodyParser: false,
-  },
+  api: { bodyParser: false }
 };
 
-import multer from 'multer';
-import nextConnect from 'next-connect';
-import fs from 'fs';
+const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-const upload = multer({ dest: '/tmp' });
+const parseForm = (req) =>
+  new Promise((resolve, reject) => {
+    const form = new formidable.IncomingForm({ keepExtensions: true });
+    form.parse(req, (err, fields, files) => {
+      if (err) reject(err);
+      else resolve({ fields, files });
+    });
+  });
 
-const handler = nextConnect();
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Only POST allowed' });
+  }
 
-handler.use(upload.single('file'));
-
-handler.post(async (req, res) => {
   try {
-    const filePath = req.file.path;
-    const dataBuffer = fs.readFileSync(filePath);
-    const pdfData = await pdfParse(dataBuffer);
+    const { files } = await parseForm(req);
+    const file = files.file;
 
-    const chunks = splitTextIntoChunks(pdfData.text, 1000, 200);
+    if (!file) return res.status(400).json({ error: 'Файл не получен' });
+
+    const buffer = fs.readFileSync(file.filepath);
+    const data = await pdfParse(buffer);
+    const text = data.text;
+
+    const chunks = splitIntoChunks(text, 1000, 200);
 
     for (const chunk of chunks) {
-      const embedding = await openai.embeddings.create({
+      const embeddingResponse = await openai.embeddings.create({
         model: 'text-embedding-ada-002',
-        input: chunk,
+        input: chunk
       });
 
-      const [{ embedding: vector }] = embedding.data;
+      const [{ embedding }] = embeddingResponse.data;
 
       await supabase.from('documents').insert([
-        { content: chunk, embedding: vector }
+        { content: chunk, embedding }
       ]);
     }
 
-    res.status(200).json({ message: 'PDF загружен и обработан успешно ✅' });
+    res.status(200).json({ message: '✅ Файл обработан и добавлен в базу знаний' });
 
-  } catch (error) {
-    console.error('Upload error:', error.message);
-    res.status(500).json({ error: 'Ошибка загрузки PDF', details: error.message });
+  } catch (err) {
+    console.error('❌ Ошибка:', err);
+    res.status(500).json({ error: 'Ошибка обработки файла', details: err.message });
   }
-});
+}
 
-export default handler;
-
-// Функция разбивки текста
-function splitTextIntoChunks(text, maxLength, overlap) {
+function splitIntoChunks(text, maxLen = 1000, overlap = 200) {
+  const words = text.split(/\s+/);
   const chunks = [];
-  let start = 0;
-  while (start < text.length) {
-    let end = Math.min(start + maxLength, text.length);
-    let chunk = text.slice(start, end).trim();
-    chunks.push(chunk);
-    start += maxLength - overlap;
+
+  for (let i = 0; i < words.length; i += maxLen - overlap) {
+    const chunk = words.slice(i, i + maxLen).join(' ');
+    if (chunk) chunks.push(chunk);
   }
+
   return chunks;
 }
