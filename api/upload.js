@@ -63,8 +63,12 @@ export default async function handler(req, res) {
     const pdfData = await pdfParse(buffer);
     const chunks = splitTextIntoChunks(pdfData.text);
 
-    for (const chunk of chunks) {
+    console.log(`🧩 Разбито на ${chunks.length} фрагментов`);
+
+    for (const [i, chunk] of chunks.entries()) {
+      console.log(`🔢 Обрабатывается фрагмент ${i + 1}/${chunks.length}`);
       const embedding = await getEmbedding(chunk);
+      console.log(`🧠 Эмбеддинг получен: ${embedding.length} значений`);
 
       const { error } = await supabase.from('documents').insert([
         {
@@ -75,6 +79,8 @@ export default async function handler(req, res) {
 
       if (error) {
         console.error('❌ Ошибка вставки в Supabase:', error);
+      } else {
+        console.log(`✅ Успешно вставлен фрагмент ${i + 1}`);
       }
     }
 
