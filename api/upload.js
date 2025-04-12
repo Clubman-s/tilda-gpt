@@ -51,15 +51,15 @@ export default async function handler(req, res) {
 
   try {
     const files = await parseForm(req);
-    const uploadedFile = files.file;
+    const uploadedFile = Array.isArray(files.file) ? files.file[0] : files.file;
 
-    if (!uploadedFile || !uploadedFile[0]?.filepath) {
+    if (!uploadedFile || !uploadedFile.filepath) {
       return res.status(400).json({ error: 'Файл не был получен' });
     }
 
-    console.log('📥 Получен файл на сервере:', uploadedFile[0]);
+    console.log('📥 Получен файл на сервере:', uploadedFile);
 
-    const buffer = fs.readFileSync(uploadedFile[0].filepath);
+    const buffer = fs.readFileSync(uploadedFile.filepath);
     const pdfData = await pdfParse(buffer);
     const chunks = splitTextIntoChunks(pdfData.text);
 
@@ -78,7 +78,7 @@ export default async function handler(req, res) {
       }
     }
 
-    res.status(200).json({ message: `✅ Файл ${uploadedFile[0].originalFilename} загружен` });
+    res.status(200).json({ message: `✅ Файл ${uploadedFile.originalFilename} загружен` });
   } catch (err) {
     console.error('❌ Ошибка обработки файла:', err);
     res.status(500).json({ error: 'Ошибка обработки файла' });
