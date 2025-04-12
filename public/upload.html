@@ -54,6 +54,9 @@
 
       formData.append('file', fileInput.files[0]);
 
+      // Логируем содержимое формы перед отправкой
+      console.log("Данные для отправки:", formData);
+
       const response = await fetch('/api/upload', {
         method: 'POST',
         body: formData
