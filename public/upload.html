@@ -43,6 +43,15 @@
       e.preventDefault();
       const formData = new FormData();
       const fileInput = document.querySelector('input[name="file"]');
+      
+      // Логирование файла
+      console.log(fileInput.files[0]);
+      
+      if (!fileInput.files[0]) {
+        document.getElementById('status').textContent = 'Ошибка: файл не выбран';
+        return;
+      }
+
       formData.append('file', fileInput.files[0]);
 
       const response = await fetch('/api/upload', {
