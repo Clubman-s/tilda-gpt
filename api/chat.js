@@ -1,4 +1,12 @@
 const { OpenAI } = require('openai');
+const { createClient } = require('@supabase/supabase-js');
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -9,13 +17,20 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
 
   try {
-    const { message } = req.body;
+    const { message, userId = 'anonymous' } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_KEY
-    });
+    // 🧠 Загружаем последние 5 сообщений пользователя
+    const { data: history } = await supabase
+      .from('messages')
+      .select('role, content')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(5);
 
+    const memoryMessages = history?.reverse() || [];
+
+    // 🧾 Системный промпт
     const systemPrompt = `
 Ты — София, эксперт по госзакупкам с 8-летним опытом. Отвечай кратко, завершёнными фразами. Максимум — 300 токенов. Твой стиль:
 
@@ -38,12 +53,16 @@ module.exports = async (req, res) => {
 "Я София, 8 лет работаю с госзакупками. Специализируюсь на 44-ФЗ!"
 `;
 
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...memoryMessages,
+      { role: 'user', content: message }
+    ];
+
+    // GPT ответ
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ],
+      messages,
       temperature: 0.7,
       max_tokens: 300,
       top_p: 0.9,
@@ -55,12 +74,18 @@ module.exports = async (req, res) => {
     reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
     reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
 
+    // 💾 Сохраняем в Supabase
+    await supabase.from('messages').insert([
+      { user_id: userId, role: 'user', content: message },
+      { user_id: userId, role: 'assistant', content: reply }
+    ]);
+
     res.json({ reply });
 
   } catch (error) {
     console.error('GPT Error:', error);
     res.status(500).json({ 
-      error: "София временно недоступна. Попробуйте задать вопрос позже 🌸",
+      error: "София временно недоступна. Попробуйте позже 🌸",
       details: error.message 
     });
   }
