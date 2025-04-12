@@ -1,62 +1,31 @@
-const { OpenAI } = require('openai');
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const OPENAI_KEY = process.env.OPENAI_KEY;
+const API_URL = process.env.TG_PROXY_URL || 'https://tilda-gpt.vercel.app/api/chat';
 
-const systemPrompt = `
-Ты — София, эксперт по госзакупкам 44-ФЗ с 8-летним опытом. 
-Стиль общения: профессиональный, но дружелюбный. 
-Запрещено: упоминать, что ты ИИ или используешь базу данных.
-`;
-
-// Псевдо-память (на время инстанса)
-const sessions = {};
+const bot = new TelegramBot(TELEGRAM_TOKEN);
 
 module.exports = async (req, res) => {
-  if (req.method !== 'POST') {
-    res.status(405).end();
-    return;
-  }
+  if (req.method !== 'POST') return res.status(405).end();
 
   const message = req.body?.message;
-  if (!message || !message.text || message.text.startsWith('/')) {
-    res.status(200).end();
-    return;
-  }
+  if (!message || !message.text || message.text.startsWith('/')) return res.status(200).end();
 
   const chatId = message.chat.id;
-  const userMessage = message.text;
-
-  const openai = new OpenAI({ apiKey: OPENAI_KEY });
-
-  // Инициализируем сессию
-  if (!sessions[chatId]) {
-    sessions[chatId] = [{ role: 'system', content: systemPrompt }];
-  }
-
-  // Добавляем сообщение
-  sessions[chatId].push({ role: 'user', content: userMessage });
-
-  const recentMessages = sessions[chatId].slice(-10); // Ограничим контекст
+  const userText = message.text;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: recentMessages,
-      temperature: 0.7,
+    const response = await axios.post(API_URL, {
+      message: userText,
+      userId: `tg-${chatId}`
     });
 
-    const reply = response.choices[0].message.content;
-    sessions[chatId].push({ role: 'assistant', content: reply });
-
-    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    const reply = response.data.reply || '❓ София не знает, как ответить';
     await bot.sendMessage(chatId, reply);
-
     res.status(200).end();
   } catch (err) {
-    console.error('Ошибка GPT:', err);
-    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    console.error('Ошибка в proxy Telegram:', err.message);
     await bot.sendMessage(chatId, '⚠️ София временно недоступна. Попробуйте позже.');
     res.status(200).end();
   }
