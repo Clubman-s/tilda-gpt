@@ -1,7 +1,7 @@
 {
   "name": "tilda-gpt-assistant",
   "version": "1.0.0",
-  "description": "AI Assistant for Tilda + Telegram with OpenAI",
+  "description": "AI Assistant for Tilda + Telegram with OpenAI and Supabase",
   "main": "api/chat.js",
   "scripts": {
     "start": "node api/telegram.js",
@@ -17,7 +17,8 @@
     "pdf-parse": "^1.1.1",
     "multer": "^1.4.5-lts.1",
     "next-connect": "^0.12.2",
-    "fs": "^0.0.1-security"
+    "fs": "^0.0.1-security",
+    "axios": "^1.6.8"
   },
   "engines": {
     "node": ">=18.x"
@@ -28,6 +29,7 @@
     "openai",
     "supabase",
     "44-ФЗ",
-    "pdf"
+    "pdf",
+    "chatbot"
   ]
 }
