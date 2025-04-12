@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Загрузка файла в базу знаний</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 80px auto;
+      padding: 40px;
+      border: 1px solid #ccc;
+      border-radius: 12px;
+      background: #f9f9f9;
+      text-align: center;
+    }
+    input[type="file"] {
+      margin-top: 20px;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 20px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h2>📄 Загрузить файл в базу знаний</h2>
+  <form id="uploadForm">
+    <input type="file" name="file" accept=".pdf,.txt,.docx,.csv" required />
+    <br>
+    <button type="submit">Загрузить</button>
+  </form>
+  <p id="status"></p>
+
+  <script>
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData();
+      const fileInput = document.querySelector('input[name="file"]');
+      formData.append('file', fileInput.files[0]);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      });
+
+      const result = await response.json();
+      document.getElementById('status').textContent = result.message || result.error || 'Ошибка';
+    });
+  </script>
+</body>
+</html>
