@@ -1,7 +1,9 @@
-import formidable from 'formidable';
+import { createServer } from 'http';
+import { Readable } from 'stream';
 import fs from 'fs';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import formidable from 'formidable';
 import { createClient } from '@supabase/supabase-js';
 
 export const config = {
@@ -13,14 +15,16 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const parseForm = (req) =>
-  new Promise((resolve, reject) => {
-    const form = new formidable.IncomingForm({ keepExtensions: true });
+// Новый способ создания form
+const parseForm = async (req) => {
+  const form = formidable();
+  return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
       if (err) reject(err);
       else resolve({ fields, files });
     });
   });
+};
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
