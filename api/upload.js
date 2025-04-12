@@ -15,7 +15,7 @@ const supabase = createClient(
 
 // Новый способ создания form
 const parseForm = async (req) => {
-  const form = new formidable.IncomingForm();
+  const form = formidable(); // Теперь это вызов функции, а не конструктора
   return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
       if (err) reject(err);
