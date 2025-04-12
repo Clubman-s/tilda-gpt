@@ -20,7 +20,7 @@ module.exports = async (req, res) => {
     const { message, userId = 'anonymous' } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
-    // 1. Получаем последние 5 сообщений для памяти
+    // 1. Загружаем последние 5 сообщений для памяти
     const { data: history } = await supabase
       .from('messages')
       .select('role, content')
@@ -30,23 +30,34 @@ module.exports = async (req, res) => {
 
     const memoryMessages = history?.reverse() || [];
 
-    // 2. Получаем embedding и ищем в базе знаний
-    const embeddingResponse = await openai.embeddings.create({
-      model: 'text-embedding-ada-002',
-      input: message,
-    });
+    // 2. Получаем embedding
+    let embedding = null;
+    try {
+      const embeddingResponse = await openai.embeddings.create({
+        model: 'text-embedding-ada-002',
+        input: message,
+      });
+      embedding = embeddingResponse?.data?.[0]?.embedding;
+    } catch (e) {
+      console.warn('⚠️ Ошибка генерации embedding:', e.message);
+    }
 
-    const [{ embedding }] = embeddingResponse.data;
+    // 3. Ищем похожие документы (если embedding получен)
+    let context = '';
+    if (embedding) {
+      try {
+        const { data: chunks } = await supabase.rpc('match_documents', {
+          query_embedding: embedding,
+          match_threshold: 0.78,
+          match_count: 3
+        });
+        context = chunks?.map(c => c.content).join('\n\n') || '';
+      } catch (e) {
+        console.warn('⚠️ Ошибка поиска по базе знаний:', e.message);
+      }
+    }
 
-    const { data: chunks } = await supabase.rpc('match_documents', {
-      query_embedding: embedding,
-      match_threshold: 0.78,
-      match_count: 3
-    });
-
-    const context = chunks?.map(c => c.content).join('\n\n') || '';
-
-    // 3. Системный промпт
+    // 4. Системный промпт
     const systemPrompt = `
 Ты — София, эксперт по госзакупкам с 8-летним опытом. Отвечай кратко, завершёнными фразами. Максимум — 300 токенов. Твой стиль:
 
@@ -70,6 +81,7 @@ ${context}
       { role: 'user', content: message }
     ];
 
+    // 5. GPT ответ
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages,
@@ -84,7 +96,7 @@ ${context}
     reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
     reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
 
-    // 4. Сохраняем сообщение и ответ
+    // 6. Сохраняем переписку
     await supabase.from('messages').insert([
       { user_id: userId, role: 'user', content: message },
       { user_id: userId, role: 'assistant', content: reply }
