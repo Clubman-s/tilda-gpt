@@ -1,6 +1,5 @@
 const { OpenAI } = require('openai');
 const { createClient } = require('@supabase/supabase-js');
-const crypto = require('crypto');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
@@ -21,7 +20,7 @@ module.exports = async (req, res) => {
     const { message, userId = 'anonymous' } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
-    // ---------- 1. Получение последних 5 сообщений для памяти ----------
+    // 1. Получаем последние 5 сообщений для памяти
     const { data: history } = await supabase
       .from('messages')
       .select('role, content')
@@ -31,7 +30,7 @@ module.exports = async (req, res) => {
 
     const memoryMessages = history?.reverse() || [];
 
-    // ---------- 2. Векторный поиск по базе знаний ----------
+    // 2. Получаем embedding и ищем в базе знаний
     const embeddingResponse = await openai.embeddings.create({
       model: 'text-embedding-ada-002',
       input: message,
@@ -47,7 +46,7 @@ module.exports = async (req, res) => {
 
     const context = chunks?.map(c => c.content).join('\n\n') || '';
 
-    // ---------- 3. Системный промпт + память + база ----------
+    // 3. Системный промпт
     const systemPrompt = `
 Ты — София, эксперт по госзакупкам с 8-летним опытом. Отвечай кратко, завершёнными фразами. Максимум — 300 токенов. Твой стиль:
 
@@ -68,7 +67,7 @@ ${context}
     const messages = [
       { role: 'system', content: systemPrompt },
       ...memoryMessages,
-      { role: 'user', content: message },
+      { role: 'user', content: message }
     ];
 
     const response = await openai.chat.completions.create({
@@ -85,7 +84,7 @@ ${context}
     reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
     reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
 
-    // ---------- 4. Сохраняем сообщение и ответ в память ----------
+    // 4. Сохраняем сообщение и ответ
     await supabase.from('messages').insert([
       { user_id: userId, role: 'user', content: message },
       { user_id: userId, role: 'assistant', content: reply }
