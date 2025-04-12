@@ -30,10 +30,11 @@ export default async function handler(req, res) {
 
   try {
     const { files } = await parseForm(req);
-    const file = files.file;
 
-    // Логирование файла на сервере
-    console.log("Получен файл на сервере:", file);
+    // ✅ Поддержка одиночного и массивного значения
+    const file = Array.isArray(files.file) ? files.file[0] : files.file;
+
+    console.log("📥 Получен файл на сервере:", file);
 
     if (!file || !file.originalFilename) {
       console.error("❌ Файл не был загружен или его имя отсутствует.");
