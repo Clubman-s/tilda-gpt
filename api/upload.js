@@ -1,27 +1,48 @@
+import { OpenAI } from 'openai';
+import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
 import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
-import { createClient } from '@supabase/supabase-js';
 
 export const config = {
-  api: { bodyParser: false }
+  api: {
+    bodyParser: false
+  }
 };
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const parseForm = async (req) => {
-  const form = formidable();
-  return new Promise((resolve, reject) => {
+const getEmbedding = async (text) => {
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-ada-002',
+    input: text
+  });
+  return response.data[0].embedding;
+};
+
+const splitTextIntoChunks = (text, maxTokens = 1000, overlap = 200) => {
+  const words = text.split(' ');
+  const chunks = [];
+  for (let i = 0; i < words.length; i += maxTokens - overlap) {
+    const chunk = words.slice(i, i + maxTokens).join(' ');
+    chunks.push(chunk);
+  }
+  return chunks;
+};
+
+const parseForm = (req) =>
+  new Promise((resolve, reject) => {
+    const form = formidable({ multiples: false });
     form.parse(req, (err, fields, files) => {
       if (err) reject(err);
-      else resolve({ fields, files });
+      else resolve(files);
     });
   });
-};
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -29,51 +50,37 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { files } = await parseForm(req);
+    const files = await parseForm(req);
+    const uploadedFile = files.file;
 
-    // ✅ Поддержка одиночного и массивного значения
-    const file = Array.isArray(files.file) ? files.file[0] : files.file;
-
-    console.log("📥 Получен файл на сервере:", file);
-
-    if (!file || !file.originalFilename) {
-      console.error("❌ Файл не был загружен или его имя отсутствует.");
-      return res.status(400).json({ error: "Файл не был получен" });
+    if (!uploadedFile || !uploadedFile[0]?.filepath) {
+      return res.status(400).json({ error: 'Файл не был получен' });
     }
 
-    const ext = file.originalFilename.split('.').pop().toLowerCase();
-    let text = '';
+    console.log('📥 Получен файл на сервере:', uploadedFile[0]);
 
-    if (ext === 'pdf') {
-      const buffer = fs.readFileSync(file.filepath);
-      const data = await pdfParse(buffer);
-      text = data.text;
-    } else if (ext === 'txt') {
-      text = fs.readFileSync(file.filepath, 'utf-8');
-    } else if (ext === 'docx') {
-      const result = await mammoth.extractRawText({ path: file.filepath });
-      text = result.value;
-    } else {
-      return res.status(400).json({ error: 'Неподдерживаемый формат файла' });
-    }
+    const buffer = fs.readFileSync(uploadedFile[0].filepath);
+    const pdfData = await pdfParse(buffer);
+    const chunks = splitTextIntoChunks(pdfData.text);
 
-    console.log('📝 Извлечён текст длиной:', text.length);
+    for (const chunk of chunks) {
+      const embedding = await getEmbedding(chunk);
 
-    const { error } = await supabase.from('documents').insert([
-      {
-        content: text,
-        embedding: null
+      const { error } = await supabase.from('documents').insert([
+        {
+          content: chunk,
+          embedding: embedding
+        }
+      ]);
+
+      if (error) {
+        console.error('❌ Ошибка вставки в Supabase:', error);
       }
-    ]);
-
-    if (error) {
-      console.error('❌ Supabase ошибка:', error);
-      return res.status(500).json({ error: 'Ошибка Supabase', details: error.message });
     }
 
-    res.status(200).json({ message: `✅ Файл ${file.originalFilename} загружен` });
+    res.status(200).json({ message: `✅ Файл ${uploadedFile[0].originalFilename} загружен` });
   } catch (err) {
-    console.error('❌ Ошибка загрузки:', err);
-    res.status(500).json({ error: 'Ошибка обработки файла', details: err.message });
+    console.error('❌ Ошибка обработки файла:', err);
+    res.status(500).json({ error: 'Ошибка обработки файла' });
   }
 }
