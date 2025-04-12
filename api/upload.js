@@ -13,9 +13,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Новый способ создания form
 const parseForm = async (req) => {
-  const form = formidable(); // Теперь это вызов функции, а не конструктора
+  const form = formidable();
   return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
       if (err) reject(err);
@@ -33,7 +32,9 @@ export default async function handler(req, res) {
     const { files } = await parseForm(req);
     const file = files.file;
 
-    console.log('📥 Получен файл:', file?.originalFilename || 'нет имени');
+    // Логирование файла, чтобы убедиться, что он получен
+    console.log('Получен файл:', file);
+
     if (!file || !file.originalFilename) {
       console.error("❌ Файл не был загружен или его имя отсутствует.");
       return res.status(400).json({ error: "Файл не был получен" });
