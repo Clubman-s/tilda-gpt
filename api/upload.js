@@ -1,11 +1,12 @@
-// api/upload.js
 import formidable from 'formidable';
 import fs from 'fs';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import { createClient } from '@supabase/supabase-js';
 
-export const config = { api: { bodyParser: false } };
+export const config = {
+  api: { bodyParser: false }
+};
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -30,6 +31,7 @@ export default async function handler(req, res) {
     const { files } = await parseForm(req);
     const file = files.file;
 
+    console.log('📥 Получен файл:', file?.originalFilename || 'нет имени');
     if (!file) return res.status(400).json({ error: 'Файл не получен' });
 
     const ext = file.originalFilename.split('.').pop().toLowerCase();
@@ -48,14 +50,21 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Неподдерживаемый формат файла' });
     }
 
-    await supabase.from('documents').insert([
+    console.log('📝 Извлечён текст длиной:', text.length);
+
+    const { error } = await supabase.from('documents').insert([
       {
         content: text,
         embedding: null
       }
     ]);
 
-    res.status(200).json({ message: `✅ Файл ${file.originalFilename} загружен. Текст сохранён в базу.` });
+    if (error) {
+      console.error('❌ Supabase ошибка:', error);
+      return res.status(500).json({ error: 'Ошибка Supabase', details: error.message });
+    }
+
+    res.status(200).json({ message: `✅ Файл ${file.originalFilename} загружен` });
   } catch (err) {
     console.error('❌ Ошибка загрузки:', err);
     res.status(500).json({ error: 'Ошибка обработки файла', details: err.message });
