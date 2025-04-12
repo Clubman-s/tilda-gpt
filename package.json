@@ -1,24 +1,22 @@
 {
   "name": "tilda-gpt-assistant",
   "version": "1.0.0",
-  "description": "AI Assistant for Tilda + Telegram with OpenAI and Supabase",
+  "description": "AI-ассистент для Tilda + Telegram с OpenAI и Supabase",
   "main": "api/chat.js",
   "scripts": {
     "start": "node api/telegram.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
+    "formidable": "^3.5.0",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.4.2",
     "openai": "^4.33.0",
     "@supabase/supabase-js": "^2.39.5",
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "node-telegram-bot-api": "^0.61.0",
     "dotenv": "^16.3.1",
-    "pdf-parse": "^1.1.1",
-    "multer": "^1.4.5-lts.1",
-    "next-connect": "^0.12.2",
-    "fs": "^0.0.1-security",
-    "axios": "^1.6.8"
+    "node-telegram-bot-api": "^0.61.0"
   },
   "engines": {
     "node": ">=18.x"
@@ -28,8 +26,9 @@
     "telegram",
     "openai",
     "supabase",
-    "44-ФЗ",
     "pdf",
-    "chatbot"
+    "docx",
+    "загрузка векторной базы",
+    "44-ФЗ"
   ]
 }
