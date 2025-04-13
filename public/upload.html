@@ -1,69 +1,58 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <title>Загрузка файла в базу знаний</title>
+  <meta charset="UTF-8">
+  <title>Загрузка документов</title>
   <style>
-    body {
-      font-family: sans-serif;
-      max-width: 600px;
-      margin: 80px auto;
-      padding: 40px;
-      border: 1px solid #ccc;
-      border-radius: 12px;
-      background: #f9f9f9;
-      text-align: center;
-    }
-    input[type="file"] {
-      margin-top: 20px;
-    }
-    button {
-      margin-top: 20px;
-      padding: 10px 20px;
-      font-size: 16px;
-      cursor: pointer;
-    }
-    #status {
-      margin-top: 20px;
-      font-weight: bold;
-    }
+    body { font-family: Arial, sans-serif; max-width: 600px; margin: 2rem auto; }
+    .upload-box { border: 2px dashed #ccc; padding: 2rem; text-align: center; }
+    #status { margin-top: 1rem; color: #666; }
+    .success { color: green; }
+    .error { color: red; }
   </style>
 </head>
 <body>
-  <h2>📄 Загрузить файл в базу знаний</h2>
-  <form id="uploadForm">
-    <input type="file" name="file" accept=".pdf,.txt,.docx,.csv" required />
-    <br>
-    <button type="submit">Загрузить</button>
-  </form>
-  <p id="status"></p>
+  <div class="upload-box">
+    <h1>Загрузите документ PDF</h1>
+    <form id="uploadForm">
+      <input type="file" name="file" accept=".pdf" required>
+      <button type="submit">Загрузить</button>
+    </form>
+    <div id="status"></div>
+  </div>
 
   <script>
     document.getElementById('uploadForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const formData = new FormData();
-      const fileInput = document.querySelector('input[name="file"]');
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = '';
+      statusDiv.textContent = 'Загрузка...';
 
-      // Логирование выбранного файла
-      console.log("Выбранный файл:", fileInput.files[0]);
+      const formData = new FormData(e.target);
+      
+      try {
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData
+        });
 
-      if (!fileInput.files[0]) {
-        document.getElementById('status').textContent = 'Ошибка: файл не выбран';
-        return;
+        const result = await response.json();
+        
+        if (result.success) {
+          statusDiv.className = 'success';
+          statusDiv.innerHTML = `
+            Успешно загружено!<br>
+            Файл: ${result.filename}<br>
+            Путь: ${result.path}
+          `;
+        } else {
+          statusDiv.className = 'error';
+          statusDiv.textContent = `Ошибка: ${result.error || 'Неизвестная ошибка'}`;
+        }
+      } catch (error) {
+        statusDiv.className = 'error';
+        statusDiv.textContent = `Ошибка сети: ${error.message}`;
       }
-
-      formData.append('file', fileInput.files[0]);
-
-      // Логируем содержимое формы перед отправкой
-      console.log("Данные для отправки:", formData);
-
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      });
-
-      const result = await response.json();
-      document.getElementById('status').textContent = result.message || result.error || 'Ошибка';
     });
   </script>
 </body>
