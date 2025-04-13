@@ -1,17 +1,17 @@
 {
-  "name": "tilda-gpt",
+  "name": "supabase-upload-vercel",
   "version": "1.0.0",
   "scripts": {
-    "dev": "vercel dev",
-    "deploy": "vercel deploy --prod"
+    "dev": "vercel dev"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.41.0",
-    "openai": "^4.43.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "openai": "^4.0.0",
     "pdf-parse": "^1.1.1",
-    "formidable": "^3.5.2"
+    "cors": "^2.8.5",
+    "formidable": "^3.5.0"
   },
   "devDependencies": {
-    "@vercel/node": "^3.0.14"
+    "@vercel/node": "^2.15.3"
   }
 }
