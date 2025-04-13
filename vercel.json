@@ -1,9 +1,16 @@
 {
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/upload.js",
+      "use": "@vercel/node"
+    }
+  ],
   "routes": [
     {
-      "src": "/api/(.*)",
-      "dest": "/api/$1",
-      "methods": ["POST", "GET"]
+      "src": "/api/upload",
+      "dest": "/api/upload",
+      "methods": ["POST"]
     },
     {
       "src": "/(.*)",
@@ -11,10 +18,7 @@
       "methods": ["GET"]
     }
   ],
-  "functions": {
-    "api/upload.js": {
-      "memory": 3008,
-      "maxDuration": 30
-    }
+  "env": {
+    "NODE_VERSION": "18.x"
   }
 }
