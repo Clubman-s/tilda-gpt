@@ -1,0 +1,20 @@
+{
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1",
+      "methods": ["POST", "GET"]
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/public/$1",
+      "methods": ["GET"]
+    }
+  ],
+  "functions": {
+    "api/upload.js": {
+      "memory": 3008,
+      "maxDuration": 30
+    }
+  }
+}
