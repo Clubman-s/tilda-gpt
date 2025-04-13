@@ -1,33 +1,15 @@
 <!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <title>Загрузка документов</title>
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 600px; margin: 2rem auto; }
-    .upload-box { border: 2px dashed #ccc; padding: 2rem; text-align: center; }
-    #status { margin-top: 1rem; color: #666; }
-    .success { color: green; }
-    .error { color: red; }
-  </style>
-</head>
+<html>
 <body>
-  <div class="upload-box">
-    <h1>Загрузите документ PDF</h1>
-    <form id="uploadForm">
-      <input type="file" name="file" accept=".pdf" required>
-      <button type="submit">Загрузить</button>
-    </form>
-    <div id="status"></div>
-  </div>
-
+  <form action="/api/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".pdf">
+    <button type="submit">Upload</button>
+  </form>
+  
   <script>
-    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+    // AJAX пример
+    document.querySelector('form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const statusDiv = document.getElementById('status');
-      statusDiv.className = '';
-      statusDiv.textContent = 'Загрузка...';
-
       const formData = new FormData(e.target);
       
       try {
@@ -35,23 +17,11 @@
           method: 'POST',
           body: formData
         });
-
-        const result = await response.json();
         
-        if (result.success) {
-          statusDiv.className = 'success';
-          statusDiv.innerHTML = `
-            Успешно загружено!<br>
-            Файл: ${result.filename}<br>
-            Путь: ${result.path}
-          `;
-        } else {
-          statusDiv.className = 'error';
-          statusDiv.textContent = `Ошибка: ${result.error || 'Неизвестная ошибка'}`;
-        }
+        const result = await response.json();
+        alert(result.success ? 'Success!' : 'Error: ' + result.error);
       } catch (error) {
-        statusDiv.className = 'error';
-        statusDiv.textContent = `Ошибка сети: ${error.message}`;
+        alert('Request failed: ' + error.message);
       }
     });
   </script>
