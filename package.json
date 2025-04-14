@@ -1,27 +1,36 @@
 {
-  "name": "tilda-gpt",
+  "name": "tilda-gpt-assistant",
   "version": "1.0.0",
-  "description": "Tilda GPT with file upload and vector search",
-  "main": "index.js",
+  "description": "AI Assistant for Tilda + Telegram with OpenAI",
+  "main": "api/chat.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node index.js"
+    "start": "node api/telegram.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0",
-    "openai": "^4.0.0",
-    "langchain": "^0.1.0",
-    "pdf-parse": "^1.1.1",
-    "mammoth": "^1.4.0",
+    "openai": "^4.33.0",
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "body-parser": "^1.20.2",
-    "dotenv": "^16.0.3",
     "node-telegram-bot-api": "^0.61.0",
-    "axios": "^1.6.2",
-    "@dqbd/tiktoken": "^1.0.7"
+    "dotenv": "^16.3.1",
+    "axios": "^1.6.7",
+    "pdf-parse": "^1.1.1",
+    "tiktoken": "^1.0.11",
+    "@dqbd/tiktoken": "^1.0.11", // Добавляем как резервный вариант
+    "@supabase/supabase-js": "^2.39.5",
+    "formidable": "^3.5.0",
+    "mammoth": "^1.6.0"
   },
   "engines": {
-    "node": ">=16.x"
-  }
+    "node": ">=18.x"
+  },
+  "keywords": [
+    "tilda",
+    "telegram",
+    "openai",
+    "supabase",
+    "44-ФЗ",
+    "бот",
+    "госзакупки"
+  ]
 }
