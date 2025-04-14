@@ -15,7 +15,7 @@ const supabase = createClient(
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY })
 
 module.exports.config = {
-  api: { bodyParser: false } // обязательно для formidable
+  api: { bodyParser: false }
 }
 
 module.exports = async (req, res) => {
@@ -27,17 +27,21 @@ module.exports = async (req, res) => {
 
   form.parse(req, async (err, fields, files) => {
     if (err) {
+      console.error('❌ Ошибка при разборе формы:', err)
       return res.status(500).json({ message: 'Ошибка парсинга файла' })
     }
 
     const file = files.file
     if (!file) {
+      console.error('⚠️ Файл не получен')
       return res.status(400).json({ message: 'Файл не найден' })
     }
 
     const filepath = file[0].filepath
     const filename = file[0].originalFilename
     const ext = path.extname(filename).toLowerCase()
+
+    console.log('📎 Получен файл:', filename, ext)
 
     let text = ''
 
@@ -53,11 +57,15 @@ module.exports = async (req, res) => {
       } else if (ext === '.txt') {
         text = fs.readFileSync(filepath, 'utf8')
       } else {
+        console.error('❌ Неподдерживаемый формат:', ext)
         return res.status(400).json({ message: 'Формат не поддерживается' })
       }
     } catch (e) {
+      console.error('❌ Ошибка при извлечении текста:', e)
       return res.status(500).json({ message: 'Ошибка чтения файла', error: e.message })
     }
+
+    console.log('📄 Извлечено символов:', text.length)
 
     const encoder = encoding_for_model('gpt-3.5-turbo')
     const tokens = encoder.encode(text)
@@ -77,25 +85,36 @@ module.exports = async (req, res) => {
     const results = []
 
     for (const chunk of chunks) {
-      const embeddingRes = await openai.embeddings.create({
-        model: 'text-embedding-ada-002',
-        input: chunk.content,
-      })
+      console.log('💾 Сохраняем чанк:', chunk.content.slice(0, 80).replace(/\n/g, ' ') + '...')
 
-      const [{ embedding }] = embeddingRes.data
+      try {
+        const embeddingRes = await openai.embeddings.create({
+          model: 'text-embedding-ada-002',
+          input: chunk.content,
+        })
 
-      const { error } = await supabase.from('chunks').insert([
-        {
-          file_id: fileId,
-          filename,
-          source_url: null,
-          content: chunk.content,
-          embedding,
-          token_count: chunk.token_count,
+        const [{ embedding }] = embeddingRes.data
+
+        const { error } = await supabase.from('chunks').insert([
+          {
+            file_id: fileId,
+            filename,
+            source_url: null,
+            content: chunk.content,
+            embedding,
+            token_count: chunk.token_count,
+          }
+        ])
+
+        if (error) {
+          console.error('❌ Ошибка вставки в Supabase:', error)
         }
-      ])
 
-      results.push({ success: !error, error })
+        results.push({ success: !error, error })
+      } catch (e) {
+        console.error('❌ Ошибка создания эмбеддинга или вставки:', e)
+        results.push({ success: false, error: e.message })
+      }
     }
 
     res.status(200).json({
