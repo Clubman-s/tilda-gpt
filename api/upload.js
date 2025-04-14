@@ -1,85 +1,84 @@
-const { createClient } = require('@supabase/supabase-js')
-const OpenAI = require('openai')
-const axios = require('axios')
-const pdfParse = require('pdf-parse')
-const { encoding_for_model } = require('tiktoken')
+import { supabase } from '../../lib/supabase'
+import { OpenAI } from 'openai'
+import { PDFLoader } from 'langchain/document_loaders/fs/pdf'
+import { DocxLoader } from 'langchain/document_loaders/fs/docx'
+import { TextLoader } from 'langchain/document_loaders/fs/text'
+import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter'
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-)
+const openai = new OpenAI(process.env.OPENAI_API_KEY)
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_KEY,
-})
-
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Only POST allowed' })
-  }
-
-  const { fileUrl } = req.body
-
-  if (!fileUrl) {
-    return res.status(400).json({ message: 'fileUrl is required' })
+    return res.status(405).json({ error: 'Method not allowed' })
   }
 
   try {
-    // 📥 Скачиваем файл
-    const response = await axios.get(fileUrl, { responseType: 'arraybuffer' })
-    const fileBuffer = response.data
-    const filename = fileUrl.split('/').pop() || 'document.pdf'
-
-    // 🧠 Получаем текст из PDF (пока только PDF)
-    const parsed = await pdfParse(fileBuffer)
-    const fullText = parsed.text
-
-    // 🔪 Разбиваем текст на чанки
-    const encoder = encoding_for_model('gpt-3.5-turbo')
-    const tokens = encoder.encode(fullText)
-    const chunkSize = 500
-    const chunks = []
-
-    for (let i = 0; i < tokens.length; i += chunkSize) {
-      const chunkTokens = tokens.slice(i, i + chunkSize)
-      const chunkText = encoder.decode(chunkTokens)
-      chunks.push({
-        content: chunkText,
-        token_count: chunkTokens.length,
-      })
+    const file = req.body.file
+    if (!file) {
+      return res.status(400).json({ error: 'No file provided' })
     }
 
-    const fileId = `doc_${Date.now()}`
-    const results = []
-
-    for (const chunk of chunks) {
-      const embeddingRes = await openai.embeddings.create({
-        model: 'text-embedding-ada-002',
-        input: chunk.content,
+    // 1. Сохраняем файл в Storage (как у вас сейчас)
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('user_files')
+      .upload(`user_${Date.now()}_${file.name}`, file.buffer, {
+        contentType: file.type
       })
 
-      const [{ embedding }] = embeddingRes.data
-
-      const { error } = await supabase.from('chunks').insert([
-        {
-          file_id: fileId,
-          filename,
-          source_url: fileUrl,
-          content: chunk.content,
-          embedding,
-          token_count: chunk.token_count,
-        }
-      ])
-
-      results.push({ success: !error, error })
+    if (uploadError) {
+      return res.status(500).json({ error: uploadError.message })
     }
 
-    res.status(200).json({
-      message: `Загружено фрагментов: ${results.length}`,
-      errors: results.filter(r => r.error)
+    // 2. Парсим текст в зависимости от типа файла
+    let loader
+    if (file.type === 'application/pdf') {
+      loader = new PDFLoader(file.buffer)
+    } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      loader = new DocxLoader(file.buffer)
+    } else {
+      loader = new TextLoader(file.buffer)
+    }
+
+    const docs = await loader.load()
+    const text = docs.map(doc => doc.pageContent || doc.text).join('\n')
+
+    // 3. Разбиваем текст на чанки
+    const splitter = new RecursiveCharacterTextSplitter({
+      chunkSize: 500,
+      chunkOverlap: 50
     })
-  } catch (err) {
-    console.error(err)
-    res.status(500).json({ message: 'Ошибка при загрузке документа', error: err.message })
+    const chunks = await splitter.splitText(text)
+
+    // 4. Сохраняем чанки с эмбеддингами
+    for (const chunk of chunks) {
+      const embedding = await openai.embeddings.create({
+        input: chunk,
+        model: "text-embedding-ada-002",
+      })
+
+      const { error: chunkError } = await supabase
+        .from('chunks')
+        .insert({
+          file_id: uploadData.path,
+          filename: file.name,
+          content: chunk,
+          embedding: embedding.data[0].embedding,
+          token_count: chunk.split(' ').length
+        })
+
+      if (chunkError) {
+        console.error('Error saving chunk:', chunkError)
+      }
+    }
+
+    return res.status(200).json({ 
+      success: true,
+      filePath: uploadData.path,
+      chunksCount: chunks.length
+    })
+
+  } catch (error) {
+    console.error('Upload error:', error)
+    return res.status(500).json({ error: error.message })
   }
 }
