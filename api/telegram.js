@@ -1,5 +1,6 @@
 const { OpenAI } = require('openai');
 const TelegramBot = require('node-telegram-bot-api');
+const { supabase } = require('../lib/supabase'); // убедись, что файл есть
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_KEY;
@@ -9,9 +10,6 @@ const systemPrompt = `
 Стиль общения: профессиональный, но дружелюбный. 
 Запрещено: упоминать, что ты ИИ или используешь базу данных.
 `;
-
-// Псевдо-память (на время инстанса)
-const sessions = {};
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
@@ -25,38 +23,61 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const chatId = message.chat.id;
+  const chatId = message.chat.id.toString();
   const userMessage = message.text;
 
   const openai = new OpenAI({ apiKey: OPENAI_KEY });
-
-  // Инициализируем сессию
-  if (!sessions[chatId]) {
-    sessions[chatId] = [{ role: 'system', content: systemPrompt }];
-  }
-
-  // Добавляем сообщение
-  sessions[chatId].push({ role: 'user', content: userMessage });
-
-  const recentMessages = sessions[chatId].slice(-10); // Ограничим контекст
+  const bot = new TelegramBot(TELEGRAM_TOKEN);
 
   try {
+    // 💾 Сохраняем сообщение пользователя в Supabase
+    await supabase.from('messages').insert([
+      {
+        session_id: chatId,
+        role: 'user',
+        content: userMessage,
+      }
+    ]);
+
+    // 📥 Загружаем последние 20 сообщений этой сессии
+    const { data: history, error } = await supabase
+      .from('messages')
+      .select('role, content')
+      .eq('session_id', chatId)
+      .order('timestamp', { ascending: true })
+      .limit(20);
+
+    if (error) {
+      console.error('Ошибка при загрузке истории из Supabase:', error);
+    }
+
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...(history || []),
+    ];
+
+    // 🤖 Ответ от GPT
     const response = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
-      messages: recentMessages,
+      messages,
       temperature: 0.7,
     });
 
     const reply = response.choices[0].message.content;
-    sessions[chatId].push({ role: 'assistant', content: reply });
 
-    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    // 💾 Сохраняем ответ Софии
+    await supabase.from('messages').insert([
+      {
+        session_id: chatId,
+        role: 'assistant',
+        content: reply,
+      }
+    ]);
+
     await bot.sendMessage(chatId, reply);
-
     res.status(200).end();
   } catch (err) {
-    console.error('Ошибка GPT:', err);
-    const bot = new TelegramBot(TELEGRAM_TOKEN);
+    console.error('GPT Ошибка:', err);
     await bot.sendMessage(chatId, '⚠️ София временно недоступна. Попробуйте позже.');
     res.status(200).end();
   }
