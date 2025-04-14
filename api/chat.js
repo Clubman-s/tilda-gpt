@@ -1,11 +1,9 @@
-import { supabase } from '../lib/supabase'
-import { Configuration, OpenAIApi } from 'openai'
+import OpenAI from 'openai'
+import { supabase } from '../lib/supabase.js'
 
-const configuration = new Configuration({
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 })
-
-const openai = new OpenAIApi(configuration)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,7 +26,7 @@ export default async function handler(req, res) {
     }
   ])
 
-  // 📚 Загружаем историю сообщений
+  // 📚 Загружаем историю
   const { data: history } = await supabase
     .from('messages')
     .select('*')
@@ -40,14 +38,14 @@ export default async function handler(req, res) {
     content: msg.content
   }))
 
-  // ✉️ Отправляем историю в GPT
-  const completion = await openai.createChatCompletion({
+  // 🤖 GPT-ответ
+  const completion = await openai.chat.completions.create({
     model: 'gpt-3.5-turbo',
     messages: messages,
     temperature: 0.7,
   })
 
-  const assistantReply = completion.data.choices[0].message.content
+  const assistantReply = completion.choices[0].message.content
 
   // 💾 Сохраняем ответ ассистента
   await supabase.from('messages').insert([
@@ -58,6 +56,5 @@ export default async function handler(req, res) {
     }
   ])
 
-  // 📤 Отдаём ответ пользователю
   res.status(200).json({ reply: assistantReply })
 }
