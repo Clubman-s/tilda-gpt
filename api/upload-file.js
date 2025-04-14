@@ -55,7 +55,7 @@ module.exports = async (req, res) => {
         const result = await mammoth.extractRawText({ buffer })
         text = result.value
       } else if (ext === '.txt') {
-        text = fs.readFileSync(filepath, 'utf8')
+        text = fs.readFileSync(filepath, 'utf8') // 🛠️ ВАЖНО: принудительно как строка
       } else {
         console.error('❌ Неподдерживаемый формат:', ext)
         return res.status(400).json({ message: 'Формат не поддерживается' })
