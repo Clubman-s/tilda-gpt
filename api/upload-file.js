@@ -85,13 +85,19 @@ module.exports = async (req, res) => {
     const results = []
 
     for (const chunk of chunks) {
-      const preview = String(chunk.content).slice(0, 80).replace(/\n/g, ' ')
+      const clean = String(chunk.content).trim()
+      if (!clean || clean.length < 10) {
+        console.log('⚠️ Пропускаем пустой или короткий чанк')
+        continue
+      }
+
+      const preview = clean.slice(0, 80).replace(/\n/g, ' ')
       console.log('💾 Сохраняем чанк:', preview + '...')
 
       try {
         const embeddingRes = await openai.embeddings.create({
           model: 'text-embedding-ada-002',
-          input: chunk.content,
+          input: clean,
         })
 
         const [{ embedding }] = embeddingRes.data
@@ -101,7 +107,7 @@ module.exports = async (req, res) => {
             file_id: fileId,
             filename,
             source_url: null,
-            content: chunk.content,
+            content: clean,
             embedding,
             token_count: chunk.token_count,
           }
