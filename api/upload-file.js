@@ -47,12 +47,13 @@ module.exports = async (req, res) => {
     try {
       if (ext === '.pdf') {
         const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
-
-        // 🛠 Отключаем воркер для Node.js
-        pdfjsLib.GlobalWorkerOptions.workerSrc = undefined;
-
         const data = new Uint8Array(fs.readFileSync(filepath));
-        const pdf = await pdfjsLib.getDocument({ data }).promise;
+
+        const pdf = await pdfjsLib.getDocument({
+          data,
+          isEvalSupported: false // ✅ это отключает worker
+        }).promise;
+
         let fullText = '';
 
         for (let i = 1; i <= pdf.numPages; i++) {
