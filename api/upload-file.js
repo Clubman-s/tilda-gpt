@@ -47,7 +47,9 @@ module.exports = async (req, res) => {
     try {
       if (ext === '.pdf') {
         const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@4.0.1/build/pdf.worker.min.mjs`;
+
+        // 🛠 Отключаем воркер для Node.js
+        pdfjsLib.GlobalWorkerOptions.workerSrc = undefined;
 
         const data = new Uint8Array(fs.readFileSync(filepath));
         const pdf = await pdfjsLib.getDocument({ data }).promise;
