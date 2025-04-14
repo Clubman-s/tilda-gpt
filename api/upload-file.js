@@ -49,16 +49,13 @@ module.exports = async (req, res) => {
       if (ext === '.pdf') {
         const buffer = fs.readFileSync(filepath);
         const parsed = await pdfParse(buffer);
-        text = parsed.text;
-        if (Buffer.isBuffer(text)) {
-          text = text.toString('utf8'); // 🛡️ защита от байтов
-        }
+        text = parsed.text?.toString?.('utf8') || String(parsed.text); // 💥 Защита от Buffer
       } else if (ext === '.docx') {
         const buffer = fs.readFileSync(filepath);
         const result = await mammoth.extractRawText({ buffer });
         text = result.value;
       } else if (ext === '.txt') {
-        text = fs.readFileSync(filepath, 'utf8'); // ✅ всегда как строка
+        text = fs.readFileSync(filepath, 'utf8');
       } else {
         console.error('❌ Неподдерживаемый формат:', ext);
         return res.status(400).json({ message: 'Формат не поддерживается' });
