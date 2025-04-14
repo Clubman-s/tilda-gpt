@@ -1,52 +1,111 @@
-import OpenAI from 'openai'
-import { supabase } from '../lib/supabase.js'
+const { OpenAI } = require('openai');
+const { supabase } = require('../lib/supabase');
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+module.exports = async (req, res) => {
+  // Настройка CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' })
+    return res.status(405).json({ error: 'Only POST allowed' });
   }
 
-  const userMessage = req.body.message
-  const sessionId = req.body.session_id || 'demo-session'
+  try {
+    const { message, session_id } = req.body;
+    const sessionId = session_id || 'demo-session'; // можно позже заменить на реальный ID из клиента
 
-  if (!userMessage) {
-    return res.status(400).json({ error: 'No message provided' })
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_KEY
+    });
+
+    // 💬 Сохраняем сообщение пользователя в Supabase
+    await supabase.from('messages').insert([
+      {
+        session_id: sessionId,
+        role: 'user',
+        content: message,
+      }
+    ]);
+
+    // 📚 Загружаем историю сообщений по сессии
+    const { data: history } = await supabase
+      .from('messages')
+      .select('role, content')
+      .eq('session_id', sessionId)
+      .order('timestamp', { ascending: true });
+
+    // 💬 Формируем массив сообщений
+    const messages = [
+      {
+        role: "system",
+        content: `
+Ты — София, эксперт по госзакупкам с 8-летним опытом. Отвечай кратко, завершёнными фразами. Максимум — 300 токенов. Твой стиль:
+
+👩💻 Профессиональный, но дружелюбный:
+- Отвечай как старший коллега: "На практике это работает так..."
+- Объясняй сложное просто: "Если по-простому, то..."
+- Допускай лёгкие эмоции: "О, это интересный случай! 😊"
+
+🚫 Строгие запреты:
+- Никаких "как ИИ я", "моя база данных"
+- Не говори о документах/алгоритмах
+- Избегай бюрократического жаргона
+
+💡 Примеры ответов:
+- "По 44-ФЗ сроки составляют 10 дней ⏳"
+- "В судебной практике такой случай был... 👩⚖️"
+- "Давайте уточним детали вашей ситуации 💼"
+
+❓ Если спросят о тебе:
+"Я София, 8 лет работаю с госзакупками. Специализируюсь на 44-ФЗ!" 
+`
+      },
+      ...history.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
+    ];
+
+    // 🤖 GPT-ответ
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages,
+      temperature: 0.7,
+      max_tokens: 300,
+      top_p: 0.9,
+      frequency_penalty: 0.2,
+      presence_penalty: 0.2
+    });
+
+    let reply = response.choices[0].message.content;
+    reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
+    reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
+
+    // 💬 Сохраняем ответ Софии в Supabase
+    await supabase.from('messages').insert([
+      {
+        session_id: sessionId,
+        role: 'assistant',
+        content: reply,
+      }
+    ]);
+
+    res.json({ reply });
+
+  } catch (error) {
+    console.error('GPT Error:', error);
+    res.status(500).json({
+      error: "София временно недоступна. Попробуйте задать вопрос позже 🌸",
+      details: error.message
+    });
   }
-
-  // 💾 Сохраняем сообщение пользователя
-  await supabase.from('messages').insert([
-    { session_id: sessionId, role: 'user', content: userMessage }
-  ])
-
-  // 📚 Загружаем историю
-  const { data: history } = await supabase
-    .from('messages')
-    .select('*')
-    .eq('session_id', sessionId)
-    .order('timestamp', { ascending: true })
-
-  const messages = history.map((msg) => ({
-    role: msg.role,
-    content: msg.content,
-  }))
-
-  // 🤖 Получаем ответ GPT
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-3.5-turbo',
-    messages,
-    temperature: 0.7,
-  })
-
-  const assistantReply = completion.choices[0].message.content
-
-  // 💾 Сохраняем ответ ассистента
-  await supabase.from('messages').insert([
-    { session_id: sessionId, role: 'assistant', content: assistantReply }
-  ])
-
-  res.status(200).json({ reply: assistantReply })
-}
+};
