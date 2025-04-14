@@ -16,7 +16,7 @@
     "axios": "^1.6.7",
     "pdf-parse": "^1.1.1",
     "tiktoken": "^1.0.11",
-    "@dqbd/tiktoken": "^1.0.11", // Добавляем как резервный вариант
+    "@dqbd/tiktoken": "^1.0.11", 
     "@supabase/supabase-js": "^2.39.5",
     "formidable": "^3.5.0",
     "mammoth": "^1.6.0"
