@@ -4,7 +4,6 @@ const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
 const mammoth = require('mammoth');
-const pdfjsLib = require('pdfjs-dist');
 const { encoding_for_model } = require('tiktoken');
 
 const supabase = createClient(
@@ -47,6 +46,7 @@ module.exports = async (req, res) => {
 
     try {
       if (ext === '.pdf') {
+        const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
         const data = new Uint8Array(fs.readFileSync(filepath));
         const pdf = await pdfjsLib.getDocument({ data }).promise;
         let fullText = '';
@@ -139,3 +139,4 @@ module.exports = async (req, res) => {
     });
   });
 };
+
