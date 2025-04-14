@@ -15,11 +15,11 @@
     "dotenv": "^16.3.1",
     "axios": "^1.6.7",
     "pdf-parse": "^1.1.1",
-    "tiktoken": "^1.0.11",
-    "@dqbd/tiktoken": "^1.0.11", 
+    "@dqbd/tiktoken": "^1.0.11",
     "@supabase/supabase-js": "^2.39.5",
     "formidable": "^3.5.0",
-    "mammoth": "^1.6.0"
+    "mammoth": "^1.6.0",
+    "pdfjs-dist": "^3.11.1"
   },
   "engines": {
     "node": ">=18.x"
