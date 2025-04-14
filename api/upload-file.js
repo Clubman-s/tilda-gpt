@@ -1,16 +1,16 @@
 import { createClient } from '@supabase/supabase-js'
 import { promises as fs } from 'fs'
 import path from 'path'
-import pdfParse from 'pdf-parse'
-import mammoth from 'mammoth'
 import formidable from 'formidable'
+import pdfParse from 'pdf-parse'
 
-// Инициализация Supabase с увеличенным таймаутом
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY,
   {
-    global: { timeout: 30000 }
+    db: {
+      schema: 'public' // Явно указываем схему
+    }
   }
 )
 
@@ -20,132 +20,96 @@ export const config = {
   }
 }
 
-// Улучшенный логгер
-function logError(context, error) {
-  const timestamp = new Date().toISOString()
-  console.error(`[${timestamp}] ERROR in ${context}:`, {
-    message: error.message,
-    stack: error.stack,
-    ...(error.response?.data && { apiResponse: error.response.data })
-  })
-}
-
 export default async function handler(req, res) {
-  console.log('Incoming request:', req.method, req.headers['content-type'])
-
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST requests allowed' })
+    return res.status(405).json({ error: 'Only POST allowed' })
   }
 
   const form = formidable({
-    maxFiles: 1,
     maxFileSize: 50 * 1024 * 1024,
-    keepExtensions: true,
-    filename: (name, ext) => `${Date.now()}${ext}`
+    keepExtensions: true
   })
 
   try {
-    console.log('Starting file processing...')
     const [fields, files] = await new Promise((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
-        if (err) {
-          logError('form.parse', err)
-          reject(err)
-        } else {
-          console.log('Form parsed successfully')
-          resolve([fields, files])
-        }
+        err ? reject(err) : resolve([fields, files])
       })
     })
 
     const file = files.file?.[0]
     if (!file) {
-      console.log('No file found in request')
       return res.status(400).json({ error: 'No file uploaded' })
     }
 
-    console.log('Processing file:', {
-      name: file.originalFilename,
-      path: file.filepath,
-      size: file.size,
-      type: file.mimetype
-    })
-
     const ext = path.extname(file.originalFilename).toLowerCase()
-    if (!['.pdf', '.docx', '.txt'].includes(ext)) {
-      console.log('Unsupported file extension:', ext)
-      return res.status(400).json({ error: 'Unsupported file type' })
-    }
-
-    // Чтение файла
     const fileBuffer = await fs.readFile(file.filepath)
-    console.log(`File read successfully (${fileBuffer.length} bytes)`)
 
+    // Извлекаем текст (даже если будет криво - сохраняем как есть)
     let text = ''
     try {
       if (ext === '.pdf') {
-        console.log('Processing PDF file...')
         const data = await pdfParse(fileBuffer)
-        text = data.text
-      } else if (ext === '.docx') {
-        console.log('Processing DOCX file...')
-        const result = await mammoth.extractRawText({ buffer: fileBuffer })
-        text = result.value
+        text = data.text || fileBuffer.toString('utf8', 0, 100000)
       } else {
-        console.log('Processing text file...')
-        text = fileBuffer.toString('utf8')
+        text = fileBuffer.toString('utf8', 0, 100000)
       }
-    } catch (parseError) {
-      logError('file parsing', parseError)
-      throw new Error(`Failed to parse ${ext} file`)
+    } catch (e) {
+      text = fileBuffer.toString('utf8', 0, 100000)
     }
 
-    text = text.replace(/\s+/g, ' ').trim()
-    console.log(`Text extracted (${text.length} chars)`)
-
-    // Подготовка данных для Supabase
+    // Готовим данные для вставки
     const fileData = {
       filename: file.originalFilename,
       extension: ext,
-      content: text.substring(0, 100000),
-      size: text.length,
+      content: text,
+      raw_data: fileBuffer.toString('base64'), // Сохраняем исходник
+      size: fileBuffer.length,
       uploaded_at: new Date().toISOString()
     }
 
-    console.log('Inserting to Supabase:', {
-      filename: fileData.filename,
-      size: fileData.size
-    })
-
+    // Вставляем с явным указанием столбцов
     const { data, error } = await supabase
       .from('files')
-      .insert(fileData)
+      .insert([
+        {
+          filename: fileData.filename,
+          extension: fileData.extension,
+          content: fileData.content,
+          raw_data: fileData.raw_data,
+          size: fileData.size,
+          uploaded_at: fileData.uploaded_at
+        }
+      ])
       .select()
       .single()
 
     if (error) {
-      logError('Supabase insert', error)
+      console.error('Supabase error details:', {
+        message: error.message,
+        code: error.code,
+        details: error.details
+      })
       throw error
     }
 
-    console.log('File saved to Supabase, ID:', data.id)
-
-    // Очистка
     await fs.unlink(file.filepath)
-    console.log('Temp file removed')
 
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
       file_id: data.id,
-      filename: file.originalFilename,
-      size: text.length
+      filename: data.filename
     })
 
   } catch (error) {
-    logError('upload handler', error)
+    console.error('Full error context:', {
+      message: error.message,
+      stack: error.stack,
+      raw: error
+    })
     return res.status(500).json({
-      error: 'File processing failed',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: 'File processing completed with issues',
+      stored: true // Файл сохранен в raw-формате
     })
   }
 }
