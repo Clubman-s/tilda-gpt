@@ -1,107 +1,105 @@
-import formidable from 'formidable';
-import fs from 'fs';
-import path from 'path';
-import { createClient } from '@supabase/supabase-js';
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
+import { createClient } from '@supabase/supabase-js'
+import { promises as fs } from 'fs'
+import path from 'path'
+import pdfParse from 'pdf-parse'
+import mammoth from 'mammoth'
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
-);
+)
 
 export const config = {
   api: {
-    bodyParser: false
+    bodyParser: false // Отключаем встроенный парсер
   }
-};
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST method allowed' });
+    return res.status(405).json({ error: 'Only POST requests allowed' })
   }
 
-  // Конфигурация formidable
-  const form = formidable({
-    maxFileSize: 50 * 1024 * 1024, // 50MB
-    keepExtensions: true,
-    multiples: false
-  });
-
   try {
-    // Парсим форму
-    const [fields, files] = await new Promise((resolve, reject) => {
-      form.parse(req, (err, fields, files) => {
-        if (err) reject(err);
-        else resolve([fields, files]);
-      });
-    });
-
-    // Проверяем наличие файла
-    if (!files.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+    // Проверяем заголовки запроса
+    if (!req.headers['content-type']?.includes('multipart/form-data')) {
+      return res.status(400).json({ error: 'Content-Type must be multipart/form-data' })
     }
 
-    const uploadedFile = files.file;
-    const fileExt = path.extname(uploadedFile.originalFilename || '').toLowerCase();
-    const validExtensions = ['.pdf', '.docx', '.txt'];
+    // Читаем raw body для обработки в памяти
+    const chunks = []
+    for await (const chunk of req) {
+      chunks.push(chunk)
+    }
+    const buffer = Buffer.concat(chunks)
 
-    // Валидация расширения
-    if (!validExtensions.includes(fileExt)) {
-      return res.status(400).json({ error: 'Unsupported file type' });
+    // Парсим вручную (упрощённая реализация formidable)
+    const boundary = req.headers['content-type']?.split('boundary=')[1]
+    if (!boundary) {
+      return res.status(400).json({ error: 'Missing boundary in Content-Type' })
     }
 
-    // Чтение файла
-    const fileBuffer = fs.readFileSync(uploadedFile.filepath);
-    let text = '';
+    const parts = buffer.toString().split(`--${boundary}`)
+    const filePart = parts.find(part => part.includes('filename="'))
+    
+    if (!filePart) {
+      return res.status(400).json({ error: 'No file found in request' })
+    }
 
-    // Обработка контента
-    if (fileExt === '.pdf') {
-      const data = await pdfParse(fileBuffer);
-      text = data.text;
-    } else if (fileExt === '.docx') {
-      const result = await mammoth.extractRawText({ buffer: fileBuffer });
-      text = result.value;
+    // Извлекаем метаданные файла
+    const filenameMatch = filePart.match(/filename="([^"]+)"/)
+    if (!filenameMatch) {
+      return res.status(400).json({ error: 'Invalid file metadata' })
+    }
+    const filename = filenameMatch[1]
+    const ext = path.extname(filename).toLowerCase()
+
+    // Проверяем расширение
+    if (!['.pdf', '.docx', '.txt'].includes(ext)) {
+      return res.status(400).json({ error: 'Unsupported file type' })
+    }
+
+    // Извлекаем содержимое файла
+    const contentStart = filePart.indexOf('\r\n\r\n') + 4
+    const contentEnd = filePart.lastIndexOf('\r\n')
+    const fileContent = filePart.slice(contentStart, contentEnd)
+
+    // Обрабатываем содержимое
+    let text = ''
+    if (ext === '.pdf') {
+      const data = await pdfParse(Buffer.from(fileContent))
+      text = data.text
+    } else if (ext === '.docx') {
+      const result = await mammoth.extractRawText({ 
+        buffer: Buffer.from(fileContent) 
+      })
+      text = result.value
     } else {
-      text = fileBuffer.toString('utf8');
+      text = Buffer.from(fileContent).toString('utf8')
     }
 
-    // Подготовка данных для Supabase
-    const fileData = {
-      filename: uploadedFile.originalFilename,
-      extension: fileExt,
-      content: text.substring(0, 100000), // Лимит 100k символов
-      size: text.length,
-      uploaded_at: new Date().toISOString()
-    };
-
-    // Вставка в Supabase
+    // Сохраняем в Supabase
     const { data, error } = await supabase
       .from('files')
-      .insert(fileData)
-      .select(); // Важно: добавляем .select() для возврата данных
+      .insert({
+        filename,
+        content: text.substring(0, 100000),
+        size: text.length
+      })
+      .select()
 
-    if (error) throw error;
+    if (error) throw error
 
-    // Удаляем временный файл
-    fs.unlinkSync(uploadedFile.filepath);
-
-    // Успешный ответ
     return res.status(201).json({
       success: true,
-      file: {
-        id: data[0].id,
-        name: fileData.filename,
-        size: fileData.size,
-        uploaded_at: fileData.uploaded_at
-      }
-    });
+      file: data[0]
+    })
 
   } catch (error) {
-    console.error('Upload error:', error);
+    console.error('Upload failed:', error)
     return res.status(500).json({
-      error: 'File processing failed',
+      error: 'Internal server error',
       details: error.message
-    });
+    })
   }
 }
