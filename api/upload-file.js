@@ -3,22 +3,26 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import formidable from 'formidable'
 
-// 1. Инициализация Supabase с обработкой ошибок
-let supabase
-try {
-  supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_ANON_KEY,
-    {
-      auth: {
-        persistSession: false
+// 1. Надежная инициализация Supabase
+const supabase = (() => {
+  try {
+    return createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY,
+      {
+        auth: { persistSession: false },
+        db: { schema: 'public' }
       }
-    }
-  )
-  console.log('Supabase initialized successfully')
-} catch (err) {
-  console.error('Supabase init failed:', err)
-  process.exit(1)
+    )
+  } catch (err) {
+    console.error('Supabase init error:', err)
+    return null
+  }
+})()
+
+// 2. Генератор имен для временных файлов
+const generateSafeFilename = (name) => {
+  return `${Date.now()}_${name.replace(/[^\w.-]/g, '_')}`
 }
 
 export const config = {
@@ -27,31 +31,17 @@ export const config = {
   }
 }
 
-// 2. Упрощенный обработчик файлов
-const processFile = async (file) => {
-  const ext = path.extname(file.originalFilename).toLowerCase()
-  const buffer = await fs.readFile(file.filepath)
-  
-  return {
-    filename: file.originalFilename,
-    extension: ext,
-    content: buffer.toString('utf8', 0, 100000), // Первые 100КБ как текст
-    raw_data: buffer.toString('base64'), // Полный файл в base64
-    size: buffer.length
-  }
-}
-
-// 3. Основной обработчик
 export default async function handler(req, res) {
-  console.log('Incoming request:', req.method)
-  
+  console.log('Начало обработки запроса')
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST allowed' })
+    return res.status(405).json({ error: 'Только POST-запросы' })
   }
 
   const form = formidable({
     maxFileSize: 50 * 1024 * 1024,
-    keepExtensions: true
+    keepExtensions: true,
+    filename: (name, ext) => generateSafeFilename(name + ext)
   })
 
   try {
@@ -59,8 +49,8 @@ export default async function handler(req, res) {
     const [fields, files] = await new Promise((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
         if (err) {
-          console.error('Form parse error:', err)
-          reject(err)
+          console.error('Ошибка парсинга формы:', err)
+          reject({ type: 'form_parse', error: err })
         } else {
           resolve([fields, files])
         }
@@ -69,75 +59,75 @@ export default async function handler(req, res) {
 
     const file = files.file?.[0]
     if (!file) {
-      console.log('No file in request')
-      return res.status(400).json({ error: 'No file uploaded' })
+      return res.status(400).json({ error: 'Файл не загружен' })
     }
 
-    console.log('Processing file:', file.originalFilename)
-    
-    // Обработка файла
-    const fileData = await processFile(file)
-    console.log('File processed:', {
-      name: fileData.filename,
-      size: fileData.size
-    })
+    console.log('Обработка файла:', file.originalFilename)
+
+    // Чтение файла
+    const fileBuffer = await fs.readFile(file.filepath)
+    const fileExt = path.extname(file.originalFilename).toLowerCase()
+    const textContent = fileBuffer.toString('utf8', 0, 100000) // Первые 100КБ как текст
+
+    // Подготовка данных
+    const fileData = {
+      filename: file.originalFilename,
+      extension: fileExt,
+      content: textContent,
+      raw_data: fileBuffer.toString('base64'),
+      size: fileBuffer.length,
+      uploaded_at: new Date().toISOString()
+    }
 
     // Попытка сохранения в Supabase
-    let dbResult = null
-    try {
-      const { data, error } = await supabase
-        .from('files')
-        .insert([{
-          filename: fileData.filename,
-          extension: fileData.extension,
-          content: fileData.content,
-          raw_data: fileData.raw_data,
-          size: fileData.size,
-          uploaded_at: new Date()
-        }])
-        .select()
-        .single()
+    let dbResponse = null
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('files')
+          .insert([fileData])
+          .select()
+          .single()
 
-      if (error) throw error
-      dbResult = data
-      console.log('Saved to Supabase, ID:', data.id)
-    } catch (dbError) {
-      console.error('Supabase save failed:', {
-        message: dbError.message,
-        code: dbError.code,
-        details: dbError.details
-      })
-      
-      // Fallback: сохраняем в локальный файл
-      const backupPath = `/tmp/${Date.now()}_${fileData.filename}`
-      await fs.writeFile(backupPath, fileData.raw_data, 'base64')
-      console.log('Saved to backup file:', backupPath)
-      
-      dbResult = { backup_path: backupPath }
+        if (error) throw error
+        dbResponse = data
+        console.log('Файл сохранен в Supabase, ID:', data.id)
+      } catch (dbError) {
+        console.error('Ошибка Supabase:', {
+          message: dbError.message,
+          code: dbError.code,
+          details: dbError.details
+        })
+      }
     }
+
+    // Резервное сохранение
+    const backupPath = `/tmp/${generateSafeFilename(file.originalFilename)}`
+    await fs.writeFile(backupPath, fileBuffer)
+    console.log('Резервная копия сохранена:', backupPath)
 
     // Очистка
     await fs.unlink(file.filepath)
-    
+
     return res.status(200).json({
       success: true,
-      file_id: dbResult?.id || null,
-      backup_path: dbResult?.backup_path || null,
-      filename: fileData.filename
+      file_id: dbResponse?.id || null,
+      backup_path: backupPath,
+      filename: fileData.filename,
+      warning: dbResponse ? null : 'Файл сохранен локально (Supabase недоступен)'
     })
 
   } catch (error) {
-    console.error('Handler error:', {
-      message: error.message,
+    console.error('Критическая ошибка:', {
+      type: error.type || 'unknown',
+      message: error.message || 'Неизвестная ошибка',
       stack: error.stack
     })
-    
+
     return res.status(500).json({
-      error: 'Processing failed',
-      stored_locally: !!error.backup_path,
-      details: process.env.NODE_ENV === 'development' 
-        ? error.message 
-        : undefined
+      error: 'Ошибка обработки файла',
+      stored_locally: !!error.backupPath,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     })
   }
 }
