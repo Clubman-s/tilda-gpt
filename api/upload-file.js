@@ -18,21 +18,17 @@ export const config = {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ error: 'Only POST method allowed' });
   }
 
-  try {
-    // Создаем экземпляр formidable с правильными опциями
-    const form = formidable({
-      maxFiles: 1,
-      maxFileSize: 50 * 1024 * 1024, // 50MB
-      keepExtensions: true,
-      filename: (name, ext) => `${Date.now()}${ext}`,
-      filter: ({ mimetype }) => {
-        return mimetype && mimetype.includes('application/');
-      }
-    });
+  // Конфигурация formidable
+  const form = formidable({
+    maxFileSize: 50 * 1024 * 1024, // 50MB
+    keepExtensions: true,
+    multiples: false
+  });
 
+  try {
     // Парсим форму
     const [fields, files] = await new Promise((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
@@ -42,59 +38,69 @@ export default async function handler(req, res) {
     });
 
     // Проверяем наличие файла
-    if (!files.file || files.file.length === 0) {
+    if (!files.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const uploadedFile = files.file[0];
+    const uploadedFile = files.file;
     const fileExt = path.extname(uploadedFile.originalFilename || '').toLowerCase();
     const validExtensions = ['.pdf', '.docx', '.txt'];
 
-    // Проверяем расширение файла
+    // Валидация расширения
     if (!validExtensions.includes(fileExt)) {
-      return res.status(400).json({ error: 'Invalid file type' });
+      return res.status(400).json({ error: 'Unsupported file type' });
     }
 
-    let text = '';
+    // Чтение файла
     const fileBuffer = fs.readFileSync(uploadedFile.filepath);
+    let text = '';
 
-    // Обработка разных форматов
+    // Обработка контента
     if (fileExt === '.pdf') {
       const data = await pdfParse(fileBuffer);
       text = data.text;
     } else if (fileExt === '.docx') {
       const result = await mammoth.extractRawText({ buffer: fileBuffer });
       text = result.value;
-    } else if (fileExt === '.txt') {
+    } else {
       text = fileBuffer.toString('utf8');
     }
 
-    // Сохраняем в Supabase
-    const { error } = await supabase
+    // Подготовка данных для Supabase
+    const fileData = {
+      filename: uploadedFile.originalFilename,
+      extension: fileExt,
+      content: text.substring(0, 100000), // Лимит 100k символов
+      size: text.length,
+      uploaded_at: new Date().toISOString()
+    };
+
+    // Вставка в Supabase
+    const { data, error } = await supabase
       .from('files')
-      .insert([{
-        filename: uploadedFile.originalFilename,
-        extension: fileExt,
-        content: text.substring(0, 100000), // Лимит контента
-        size: text.length,
-        uploaded_at: new Date().toISOString()
-      }]);
+      .insert(fileData)
+      .select(); // Важно: добавляем .select() для возврата данных
 
     if (error) throw error;
 
     // Удаляем временный файл
     fs.unlinkSync(uploadedFile.filepath);
 
-    return res.status(200).json({
+    // Успешный ответ
+    return res.status(201).json({
       success: true,
-      filename: uploadedFile.originalFilename,
-      chars: text.length
+      file: {
+        id: data[0].id,
+        name: fileData.filename,
+        size: fileData.size,
+        uploaded_at: fileData.uploaded_at
+      }
     });
 
   } catch (error) {
-    console.error('Upload failed:', error);
+    console.error('Upload error:', error);
     return res.status(500).json({
-      error: 'File processing error',
+      error: 'File processing failed',
       details: error.message
     });
   }
