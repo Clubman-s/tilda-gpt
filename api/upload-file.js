@@ -5,7 +5,7 @@ const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
 const mammoth = require('mammoth');
 const { encoding_for_model } = require('@dqbd/tiktoken');
-const pdf = require('pdf-parse'); // Используем pdf-parse вместо pdfjs-dist
+const pdf = require('pdf-parse');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -13,6 +13,48 @@ const supabase = createClient(
 );
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
+
+// Функция для рендеринга страниц PDF с сохранением структуры
+async function renderPage(pageData) {
+  const textContent = await pageData.getTextContent();
+  let lastY, text = '';
+  
+  for (const item of textContent.items) {
+    if (lastY === item.transform[5] || !lastY) {
+      text += item.str + ' ';
+    } else {
+      text += '\n' + item.str + ' ';
+    }
+    lastY = item.transform[5];
+  }
+  return text;
+}
+
+// Функция для обработки PDF с учетом кодировки
+async function parsePDF(filepath) {
+  const dataBuffer = fs.readFileSync(filepath);
+  const options = {
+    pagerender: renderPage,
+    max: 0 // Без ограничения длины
+  };
+
+  try {
+    const data = await pdf(dataBuffer, options);
+    let text = data.text
+      .replace(/\s+/g, ' ')
+      .replace(/(\d+,\d+)+/g, match => {
+        // Обработка числовых последовательностей как символов Unicode
+        const codes = match.split(',').map(Number);
+        return Buffer.from(codes).toString('utf8');
+      })
+      .trim();
+
+    return text;
+  } catch (error) {
+    console.error('PDF parsing error:', error);
+    throw new Error('Failed to parse PDF');
+  }
+}
 
 module.exports.config = {
   api: { bodyParser: false }
@@ -27,30 +69,25 @@ module.exports = async (req, res) => {
 
   form.parse(req, async (err, fields, files) => {
     if (err) {
-      console.error('❌ Ошибка при разборе формы:', err);
-      return res.status(500).json({ message: 'Ошибка парсинга файла' });
+      console.error('❌ Form parsing error:', err);
+      return res.status(500).json({ message: 'File parsing error' });
     }
 
     const file = files.file;
     if (!file) {
-      console.error('⚠️ Файл не получен');
-      return res.status(400).json({ message: 'Файл не найден' });
+      return res.status(400).json({ message: 'No file uploaded' });
     }
 
     const filepath = file[0].filepath;
     const filename = file[0].originalFilename;
     const ext = path.extname(filename).toLowerCase();
 
-    console.log('📎 Получен файл:', filename, ext);
+    console.log(`📄 Processing file: ${filename}`);
 
     let text = '';
-
     try {
       if (ext === '.pdf') {
-        // Используем pdf-parse вместо pdfjs-dist
-        const dataBuffer = fs.readFileSync(filepath);
-        const data = await pdf(dataBuffer);
-        text = data.text;
+        text = await parsePDF(filepath);
       } else if (ext === '.docx') {
         const buffer = fs.readFileSync(filepath);
         const result = await mammoth.extractRawText({ buffer });
@@ -58,20 +95,12 @@ module.exports = async (req, res) => {
       } else if (ext === '.txt') {
         text = fs.readFileSync(filepath, 'utf8');
       } else {
-        console.error('❌ Неподдерживаемый формат:', ext);
-        return res.status(400).json({ message: 'Формат не поддерживается' });
+        return res.status(400).json({ message: 'Unsupported file type' });
       }
-    } catch (e) {
-      console.error('❌ Ошибка при извлечении текста:', e);
-      return res.status(500).json({ 
-        message: 'Ошибка чтения файла', 
-        error: e.message 
-      });
-    }
 
-    console.log('📄 Извлечено символов:', text.length);
+      console.log(`✅ Extracted text (${text.length} chars)`);
 
-    try {
+      // Обработка текста и создание чанков
       const encoder = encoding_for_model('gpt-3.5-turbo');
       const tokens = encoder.encode(text);
       const chunkSize = 500;
@@ -79,69 +108,61 @@ module.exports = async (req, res) => {
 
       for (let i = 0; i < tokens.length; i += chunkSize) {
         const chunkTokens = tokens.slice(i, i + chunkSize);
-        const chunkText = encoder.decode(chunkTokens);
         chunks.push({
-          content: chunkText,
-          token_count: chunkTokens.length,
+          content: encoder.decode(chunkTokens),
+          token_count: chunkTokens.length
         });
       }
 
-      const fileId = `upload_${Date.now()}`;
-      const results = [];
+      // Сохранение в Supabase
+      const fileId = `file_${Date.now()}`;
+      const savedChunks = [];
 
-      for (const chunk of chunks) {
-        const clean = String(chunk.content).trim();
-        if (!clean || clean.length < 10) {
-          console.log('⚠️ Пропускаем пустой или короткий чанк');
-          continue;
-        }
-
-        const preview = clean.slice(0, 80).replace(/\n/g, ' ');
-        console.log('💾 Сохраняем чанк:', preview + '...');
-
+      for (const [index, chunk] of chunks.entries()) {
         try {
-          const embeddingRes = await openai.embeddings.create({
+          const { data: embeddingData, error: embeddingError } = await openai.embeddings.create({
             model: 'text-embedding-ada-002',
-            input: clean,
+            input: chunk.content,
           });
 
-          const [{ embedding }] = embeddingRes.data;
+          if (embeddingError) throw embeddingError;
 
-          const { error } = await supabase.from('chunks').insert([
-            {
+          const { error: supabaseError } = await supabase
+            .from('chunks')
+            .insert({
               file_id: fileId,
-              filename,
-              source_url: null,
-              content: clean,
-              embedding,
+              filename: filename,
+              content: chunk.content,
+              embedding: embeddingData.data[0].embedding,
               token_count: chunk.token_count,
-            }
-          ]);
+              chunk_number: index + 1
+            });
 
-          results.push({ 
-            success: !error, 
-            error: error?.message 
-          });
-        } catch (e) {
-          console.error('❌ Ошибка создания эмбеддинга или вставки:', e);
-          results.push({ 
-            success: false, 
-            error: e.message 
-          });
+          if (supabaseError) throw supabaseError;
+
+          savedChunks.push({ success: true });
+        } catch (error) {
+          console.error(`❌ Error saving chunk ${index + 1}:`, error);
+          savedChunks.push({ success: false, error: error.message });
         }
       }
 
+      const successCount = savedChunks.filter(c => c.success).length;
+      console.log(`💾 Saved ${successCount}/${chunks.length} chunks`);
+
       return res.status(200).json({
-        message: `Загружено фрагментов: ${results.filter(r => r.success).length}`,
+        success: true,
+        filename: filename,
         total_chunks: chunks.length,
-        errors: results.filter(r => r.error)
+        saved_chunks: successCount,
+        errors: savedChunks.filter(c => !c.success).length
       });
 
-    } catch (e) {
-      console.error('❌ Критическая ошибка обработки:', e);
-      return res.status(500).json({ 
-        message: 'Ошибка обработки файла',
-        error: e.message 
+    } catch (error) {
+      console.error('❌ Processing error:', error);
+      return res.status(500).json({
+        message: 'File processing failed',
+        error: error.message
       });
     }
   });
