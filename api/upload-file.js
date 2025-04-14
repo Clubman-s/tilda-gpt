@@ -7,53 +7,35 @@ const mammoth = require('mammoth');
 const { encoding_for_model } = require('@dqbd/tiktoken');
 const pdf = require('pdf-parse');
 
+// Инициализация клиентов
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
-// Функция для рендеринга страниц PDF с сохранением структуры
-async function renderPage(pageData) {
-  const textContent = await pageData.getTextContent();
-  let lastY, text = '';
-  
-  for (const item of textContent.items) {
-    if (lastY === item.transform[5] || !lastY) {
-      text += item.str + ' ';
-    } else {
-      text += '\n' + item.str + ' ';
-    }
-    lastY = item.transform[5];
-  }
-  return text;
-}
-
-// Функция для обработки PDF с учетом кодировки
+// Функция обработки PDF (исправленная)
 async function parsePDF(filepath) {
   const dataBuffer = fs.readFileSync(filepath);
   const options = {
-    pagerender: renderPage,
-    max: 0 // Без ограничения длины
+    normalizeWhitespace: true,
+    disableCombineTextItems: false
   };
 
-  try {
-    const data = await pdf(dataBuffer, options);
-    let text = data.text
-      .replace(/\s+/g, ' ')
-      .replace(/(\d+,\d+)+/g, match => {
-        // Обработка числовых последовательностей как символов Unicode
-        const codes = match.split(',').map(Number);
-        return Buffer.from(codes).toString('utf8');
-      })
-      .trim();
+  const data = await pdf(dataBuffer, options);
+  let text = data.text;
 
-    return text;
-  } catch (error) {
-    console.error('PDF parsing error:', error);
-    throw new Error('Failed to parse PDF');
-  }
+  // Преобразование числовых последовательностей в текст
+  text = text.replace(/(\d+,\d+)+/g, match => {
+    const codes = match.split(',').map(Number);
+    const validCodes = codes.filter(code => code >= 32 && code <= 1114111);
+    return Buffer.from(validCodes).toString('utf8');
+  });
+
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/[^\p{L}\p{N}\p{P}\p{Z}]/gu, '')
+    .trim();
 }
 
 module.exports.config = {
@@ -62,45 +44,40 @@ module.exports.config = {
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Only POST allowed' });
+    return res.status(405).json({ error: 'Только POST-запросы' });
   }
 
   const form = new formidable.IncomingForm();
-
   form.parse(req, async (err, fields, files) => {
     if (err) {
-      console.error('❌ Form parsing error:', err);
-      return res.status(500).json({ message: 'File parsing error' });
+      console.error('Ошибка загрузки файла:', err);
+      return res.status(500).json({ error: 'Ошибка загрузки' });
     }
 
-    const file = files.file;
+    const file = files.file?.[0];
     if (!file) {
-      return res.status(400).json({ message: 'No file uploaded' });
+      return res.status(400).json({ error: 'Файл не получен' });
     }
 
-    const filepath = file[0].filepath;
-    const filename = file[0].originalFilename;
-    const ext = path.extname(filename).toLowerCase();
-
-    console.log(`📄 Processing file: ${filename}`);
-
-    let text = '';
     try {
+      // Определяем тип файла
+      const ext = path.extname(file.originalFilename).toLowerCase();
+      let text = '';
+
+      // Обработка разных форматов
       if (ext === '.pdf') {
-        text = await parsePDF(filepath);
+        text = await parsePDF(file.filepath);
       } else if (ext === '.docx') {
-        const buffer = fs.readFileSync(filepath);
+        const buffer = fs.readFileSync(file.filepath);
         const result = await mammoth.extractRawText({ buffer });
         text = result.value;
       } else if (ext === '.txt') {
-        text = fs.readFileSync(filepath, 'utf8');
+        text = fs.readFileSync(file.filepath, 'utf8');
       } else {
-        return res.status(400).json({ message: 'Unsupported file type' });
+        return res.status(400).json({ error: 'Неподдерживаемый формат' });
       }
 
-      console.log(`✅ Extracted text (${text.length} chars)`);
-
-      // Обработка текста и создание чанков
+      // Разбиваем на чанки
       const encoder = encoding_for_model('gpt-3.5-turbo');
       const tokens = encoder.encode(text);
       const chunkSize = 500;
@@ -114,55 +91,42 @@ module.exports = async (req, res) => {
         });
       }
 
-      // Сохранение в Supabase
+      // Сохраняем в Supabase
       const fileId = `file_${Date.now()}`;
-      const savedChunks = [];
-
-      for (const [index, chunk] of chunks.entries()) {
-        try {
-          const { data: embeddingData, error: embeddingError } = await openai.embeddings.create({
-            model: 'text-embedding-ada-002',
-            input: chunk.content,
-          });
-
-          if (embeddingError) throw embeddingError;
-
-          const { error: supabaseError } = await supabase
-            .from('chunks')
-            .insert({
-              file_id: fileId,
-              filename: filename,
-              content: chunk.content,
-              embedding: embeddingData.data[0].embedding,
-              token_count: chunk.token_count,
-              chunk_number: index + 1
+      const results = await Promise.all(
+        chunks.map(async (chunk) => {
+          try {
+            const { data: embedding } = await openai.embeddings.create({
+              model: 'text-embedding-ada-002',
+              input: chunk.content,
             });
 
-          if (supabaseError) throw supabaseError;
+            const { error } = await supabase.from('chunks').insert({
+              file_id: fileId,
+              filename: file.originalFilename,
+              content: chunk.content,
+              embedding: embedding.data[0].embedding,
+              token_count: chunk.token_count
+            });
 
-          savedChunks.push({ success: true });
-        } catch (error) {
-          console.error(`❌ Error saving chunk ${index + 1}:`, error);
-          savedChunks.push({ success: false, error: error.message });
-        }
-      }
+            return { success: !error, error };
+          } catch (e) {
+            return { success: false, error: e.message };
+          }
+        })
+      );
 
-      const successCount = savedChunks.filter(c => c.success).length;
-      console.log(`💾 Saved ${successCount}/${chunks.length} chunks`);
-
-      return res.status(200).json({
+      res.status(200).json({
         success: true,
-        filename: filename,
-        total_chunks: chunks.length,
-        saved_chunks: successCount,
-        errors: savedChunks.filter(c => !c.success).length
+        chunks: results.filter(r => r.success).length,
+        errors: results.filter(r => r.error).length
       });
 
     } catch (error) {
-      console.error('❌ Processing error:', error);
-      return res.status(500).json({
-        message: 'File processing failed',
-        error: error.message
+      console.error('Ошибка обработки:', error);
+      res.status(500).json({ 
+        error: 'Ошибка обработки файла',
+        details: error.message 
       });
     }
   });
