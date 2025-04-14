@@ -1,18 +1,9 @@
-import { createClient } from '@supabase/supabase-js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import formidable from 'formidable'
 
-// 1. Проверка переменных окружения
-console.log('Supabase URL:', process.env.SUPABASE_URL?.slice(0, 15) + '...') // Логируем часть URL
-
-const supabase = createClient(
-  process.env.SUPABASE_URL || 'https://default.fallback.url',
-  process.env.SUPABASE_ANON_KEY || 'fake-key',
-  {
-    auth: { persistSession: false }
-  }
-)
+// Отключаем Supabase для теста
+const USE_SUPABASE = false // Поставьте true после проверки
 
 export const config = {
   api: {
@@ -21,20 +12,21 @@ export const config = {
 }
 
 export default async function handler(req, res) {
+  console.log('Запрос получен')
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Только POST-запросы' })
   }
 
   const form = formidable({
     maxFileSize: 50 * 1024 * 1024,
-    keepExtensions: true,
-    filename: (name, ext) => `${Date.now()}${ext}` // Упрощенные имена
+    filename: () => `${Date.now()}.pdf` // Простые имена файлов
   })
 
   try {
     const [fields, files] = await new Promise((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
-        err ? reject({ type: 'FORM_PARSE', error: err }) : resolve([fields, files])
+        err ? reject({ type: 'FORM_ERROR', error: err }) : resolve([fields, files])
       })
     })
 
@@ -43,53 +35,27 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Файл не загружен' })
     }
 
-    // Чтение файла
-    const fileBuffer = await fs.readFile(file.filepath)
-    const textContent = fileBuffer.toString('utf8', 0, 100000) // Первые 100КБ текста
+    // Сохранение файла
+    const savedPath = `/tmp/${file.newFilename}`
+    await fs.rename(file.filepath, savedPath)
 
-    // Попытка сохранения в Supabase
-    let dbId = null
-    try {
-      const { data, error } = await supabase
-        .from('files')
-        .insert([{
-          filename: file.originalFilename,
-          content: textContent,
-          size: fileBuffer.length,
-          uploaded_at: new Date().toISOString()
-        }])
-        .select('id')
-        .single()
-
-      if (error) throw error
-      dbId = data.id
-      console.log('Supabase ID:', dbId)
-    } catch (dbError) {
-      console.error('Supabase Error:', {
-        message: dbError.message,
-        code: dbError.code,
-        details: dbError.details
-      })
-    }
-
-    // Резервное сохранение
-    const backupPath = `/tmp/${Date.now()}.pdf`
-    await fs.writeFile(backupPath, fileBuffer)
-    console.log('Backup Path:', backupPath)
-
-    // Ответ
+    console.log('Файл сохранен:', savedPath)
+    
     return res.status(200).json({
       success: true,
-      file_id: dbId,
-      backup_path: backupPath,
+      path: savedPath,
       filename: file.originalFilename
     })
 
   } catch (error) {
-    console.error('Fatal Error:', error.type || 'UNKNOWN', error.message)
+    console.error('Ошибка:', {
+      type: error.type,
+      message: error.message || 'Неизвестная ошибка'
+    })
+    
     return res.status(500).json({
-      error: 'Ошибка обработки',
-      details: error.type === 'FORM_PARSE' ? 'Неверный формат файла' : 'Серверная ошибка'
+      error: 'Ошибка загрузки',
+      details: error.type === 'FORM_ERROR' ? 'Неправильный формат файла' : 'Ошибка сервера'
     })
   }
 }
