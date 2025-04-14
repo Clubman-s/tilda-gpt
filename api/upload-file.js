@@ -85,7 +85,8 @@ module.exports = async (req, res) => {
     const results = []
 
     for (const chunk of chunks) {
-      console.log('💾 Сохраняем чанк:', chunk.content.slice(0, 80).replace(/\n/g, ' ') + '...')
+      const preview = String(chunk.content).slice(0, 80).replace(/\n/g, ' ')
+      console.log('💾 Сохраняем чанк:', preview + '...')
 
       try {
         const embeddingRes = await openai.embeddings.create({
