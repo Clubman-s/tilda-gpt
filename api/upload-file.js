@@ -4,7 +4,8 @@ const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
 const mammoth = require('mammoth');
-const { encoding_for_model } = require('tiktoken');
+const { encoding_for_model } = require('@dqbd/tiktoken');
+const pdf = require('pdf-parse'); // Используем pdf-parse вместо pdfjs-dist
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -46,24 +47,10 @@ module.exports = async (req, res) => {
 
     try {
       if (ext === '.pdf') {
-        const pdfjsLib = await import('pdfjs-dist/build/pdf.mjs');
-        const data = new Uint8Array(fs.readFileSync(filepath));
-
-        const pdf = await pdfjsLib.getDocument({
-          data,
-          isEvalSupported: false // ✅ это отключает worker
-        }).promise;
-
-        let fullText = '';
-
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          const strings = content.items.map(item => item.str).join(' ');
-          fullText += strings + '\n';
-        }
-
-        text = fullText;
+        // Используем pdf-parse вместо pdfjs-dist
+        const dataBuffer = fs.readFileSync(filepath);
+        const data = await pdf(dataBuffer);
+        text = data.text;
       } else if (ext === '.docx') {
         const buffer = fs.readFileSync(filepath);
         const result = await mammoth.extractRawText({ buffer });
@@ -76,71 +63,86 @@ module.exports = async (req, res) => {
       }
     } catch (e) {
       console.error('❌ Ошибка при извлечении текста:', e);
-      return res.status(500).json({ message: 'Ошибка чтения файла', error: e.message });
+      return res.status(500).json({ 
+        message: 'Ошибка чтения файла', 
+        error: e.message 
+      });
     }
 
     console.log('📄 Извлечено символов:', text.length);
 
-    const encoder = encoding_for_model('gpt-3.5-turbo');
-    const tokens = encoder.encode(text);
-    const chunkSize = 500;
-    const chunks = [];
+    try {
+      const encoder = encoding_for_model('gpt-3.5-turbo');
+      const tokens = encoder.encode(text);
+      const chunkSize = 500;
+      const chunks = [];
 
-    for (let i = 0; i < tokens.length; i += chunkSize) {
-      const chunkTokens = tokens.slice(i, i + chunkSize);
-      const chunkText = encoder.decode(chunkTokens);
-      chunks.push({
-        content: chunkText,
-        token_count: chunkTokens.length,
-      });
-    }
-
-    const fileId = `upload_${Date.now()}`;
-    const results = [];
-
-    for (const chunk of chunks) {
-      const clean = String(chunk.content).trim();
-      if (!clean || clean.length < 10) {
-        console.log('⚠️ Пропускаем пустой или короткий чанк');
-        continue;
+      for (let i = 0; i < tokens.length; i += chunkSize) {
+        const chunkTokens = tokens.slice(i, i + chunkSize);
+        const chunkText = encoder.decode(chunkTokens);
+        chunks.push({
+          content: chunkText,
+          token_count: chunkTokens.length,
+        });
       }
 
-      const preview = clean.slice(0, 80).replace(/\n/g, ' ');
-      console.log('💾 Сохраняем чанк:', preview + '...');
+      const fileId = `upload_${Date.now()}`;
+      const results = [];
 
-      try {
-        const embeddingRes = await openai.embeddings.create({
-          model: 'text-embedding-ada-002',
-          input: clean,
-        });
-
-        const [{ embedding }] = embeddingRes.data;
-
-        const { error } = await supabase.from('chunks').insert([
-          {
-            file_id: fileId,
-            filename,
-            source_url: null,
-            content: clean,
-            embedding,
-            token_count: chunk.token_count,
-          }
-        ]);
-
-        if (error) {
-          console.error('❌ Ошибка вставки в Supabase:', error);
+      for (const chunk of chunks) {
+        const clean = String(chunk.content).trim();
+        if (!clean || clean.length < 10) {
+          console.log('⚠️ Пропускаем пустой или короткий чанк');
+          continue;
         }
 
-        results.push({ success: !error, error });
-      } catch (e) {
-        console.error('❌ Ошибка создания эмбеддинга или вставки:', e);
-        results.push({ success: false, error: e.message });
-      }
-    }
+        const preview = clean.slice(0, 80).replace(/\n/g, ' ');
+        console.log('💾 Сохраняем чанк:', preview + '...');
 
-    res.status(200).json({
-      message: `Загружено фрагментов: ${results.length}`,
-      errors: results.filter(r => r.error)
-    });
+        try {
+          const embeddingRes = await openai.embeddings.create({
+            model: 'text-embedding-ada-002',
+            input: clean,
+          });
+
+          const [{ embedding }] = embeddingRes.data;
+
+          const { error } = await supabase.from('chunks').insert([
+            {
+              file_id: fileId,
+              filename,
+              source_url: null,
+              content: clean,
+              embedding,
+              token_count: chunk.token_count,
+            }
+          ]);
+
+          results.push({ 
+            success: !error, 
+            error: error?.message 
+          });
+        } catch (e) {
+          console.error('❌ Ошибка создания эмбеддинга или вставки:', e);
+          results.push({ 
+            success: false, 
+            error: e.message 
+          });
+        }
+      }
+
+      return res.status(200).json({
+        message: `Загружено фрагментов: ${results.filter(r => r.success).length}`,
+        total_chunks: chunks.length,
+        errors: results.filter(r => r.error)
+      });
+
+    } catch (e) {
+      console.error('❌ Критическая ошибка обработки:', e);
+      return res.status(500).json({ 
+        message: 'Ошибка обработки файла',
+        error: e.message 
+      });
+    }
   });
 };
