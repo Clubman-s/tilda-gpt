@@ -1,13 +1,11 @@
-const { Configuration, OpenAIApi } = require('openai')
-const { supabase } = require('../lib/supabase')
+import OpenAI from 'openai'
+import { supabase } from '../lib/supabase.js'
 
-const configuration = new Configuration({
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 })
 
-const openai = new OpenAIApi(configuration)
-
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
@@ -21,11 +19,7 @@ module.exports = async function handler(req, res) {
 
   // 💾 Сохраняем сообщение пользователя
   await supabase.from('messages').insert([
-    {
-      session_id: sessionId,
-      role: 'user',
-      content: userMessage,
-    },
+    { session_id: sessionId, role: 'user', content: userMessage }
   ])
 
   // 📚 Загружаем историю
@@ -40,22 +34,18 @@ module.exports = async function handler(req, res) {
     content: msg.content,
   }))
 
-  // 🤖 GPT-ответ
-  const completion = await openai.createChatCompletion({
+  // 🤖 Получаем ответ GPT
+  const completion = await openai.chat.completions.create({
     model: 'gpt-3.5-turbo',
     messages,
     temperature: 0.7,
   })
 
-  const assistantReply = completion.data.choices[0].message.content
+  const assistantReply = completion.choices[0].message.content
 
   // 💾 Сохраняем ответ ассистента
   await supabase.from('messages').insert([
-    {
-      session_id: sessionId,
-      role: 'assistant',
-      content: assistantReply,
-    },
+    { session_id: sessionId, role: 'assistant', content: assistantReply }
   ])
 
   res.status(200).json({ reply: assistantReply })
