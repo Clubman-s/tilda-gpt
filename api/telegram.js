@@ -1,6 +1,6 @@
 const { OpenAI } = require('openai');
 const TelegramBot = require('node-telegram-bot-api');
-const { supabase } = require('../lib/supabase'); // убедись, что файл есть
+const { supabase } = require('../lib/supabase');
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const OPENAI_KEY = process.env.OPENAI_KEY;
@@ -31,7 +31,13 @@ module.exports = async (req, res) => {
 
   try {
     // 💾 Сохраняем сообщение пользователя в Supabase
-    await supabase.from('messages').insert([
+    console.log('💬 Пытаемся сохранить сообщение в Supabase:', {
+      session_id: chatId,
+      role: 'user',
+      content: userMessage
+    });
+
+    const insertUser = await supabase.from('messages').insert([
       {
         session_id: chatId,
         role: 'user',
@@ -39,7 +45,9 @@ module.exports = async (req, res) => {
       }
     ]);
 
-    // 📥 Загружаем последние 20 сообщений этой сессии
+    console.log('📝 Результат вставки user:', insertUser);
+
+    // 📥 Загружаем историю из Supabase
     const { data: history, error } = await supabase
       .from('messages')
       .select('role, content')
@@ -48,7 +56,9 @@ module.exports = async (req, res) => {
       .limit(20);
 
     if (error) {
-      console.error('Ошибка при загрузке истории из Supabase:', error);
+      console.error('❗ Ошибка при загрузке истории:', error);
+    } else {
+      console.log('📜 История загружена:', history);
     }
 
     const messages = [
@@ -56,7 +66,7 @@ module.exports = async (req, res) => {
       ...(history || []),
     ];
 
-    // 🤖 Ответ от GPT
+    // 🤖 Запрашиваем ответ у OpenAI
     const response = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages,
@@ -65,8 +75,8 @@ module.exports = async (req, res) => {
 
     const reply = response.choices[0].message.content;
 
-    // 💾 Сохраняем ответ Софии
-    await supabase.from('messages').insert([
+    // 💾 Сохраняем ответ Софии в Supabase
+    const insertAssistant = await supabase.from('messages').insert([
       {
         session_id: chatId,
         role: 'assistant',
@@ -74,10 +84,12 @@ module.exports = async (req, res) => {
       }
     ]);
 
+    console.log('🤖 Результат вставки assistant:', insertAssistant);
+
     await bot.sendMessage(chatId, reply);
     res.status(200).end();
   } catch (err) {
-    console.error('GPT Ошибка:', err);
+    console.error('❌ GPT Ошибка:', err);
     await bot.sendMessage(chatId, '⚠️ София временно недоступна. Попробуйте позже.');
     res.status(200).end();
   }
