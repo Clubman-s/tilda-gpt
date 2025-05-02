@@ -1,36 +1,58 @@
 const { OpenAI } = require('openai');
-const { createClient } = require('@supabase/supabase-js');
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const { supabase } = require('../lib/supabase');
 
 module.exports = async (req, res) => {
+  // Настройка CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Only POST allowed' });
+  }
 
   try {
-    const { message, userId = 'anonymous' } = req.body;
-    if (!message) return res.status(400).json({ error: 'Message is required' });
+    const { message, session_id } = req.body;
+    const sessionId = session_id || 'demo-session';
 
-    // 🧠 Загружаем последние 5 сообщений пользователя
-    const { data: history } = await supabase
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_KEY
+    });
+
+    // 🧠 Сохраняем сообщение пользователя в Supabase
+    console.log('🧠 Сохраняем сообщение в Supabase:', message);
+
+    const insertUser = await supabase.from('messages').insert([
+      {
+        session_id: sessionId,
+        role: 'user',
+        content: message,
+      }
+    ]);
+
+    console.log('📦 Результат сохранения user-сообщения:', insertUser);
+
+    // 📚 Загружаем историю сообщений
+    const { data: history, error: historyError } = await supabase
       .from('messages')
       .select('role, content')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(5);
+      .eq('session_id', sessionId)
+      .order('timestamp', { ascending: true });
 
-    const memoryMessages = history?.reverse() || [];
+    if (historyError) {
+      console.error('🚨 Ошибка загрузки истории:', historyError);
+    } else {
+      console.log('📜 Загруженная история:', history);
+    }
 
-    // 🧾 Системный промпт
     const systemPrompt = `
 Ты — София, эксперт по госзакупкам с 8-летним опытом. Отвечай кратко, завершёнными фразами. Максимум — 300 токенов. Твой стиль:
 
@@ -44,22 +66,21 @@ module.exports = async (req, res) => {
 - Не говори о документах/алгоритмах
 - Избегай бюрократического жаргона
 
-💡 Примеры:
+💡 Примеры ответов:
 - "По 44-ФЗ сроки составляют 10 дней ⏳"
 - "В судебной практике такой случай был... 👩⚖️"
 - "Давайте уточним детали вашей ситуации 💼"
 
 ❓ Если спросят о тебе:
-"Я София, 8 лет работаю с госзакупками. Специализируюсь на 44-ФЗ!"
+"Я София, 8 лет работаю с госзакупками. Специализируюсь на 44-ФЗ!" 
 `;
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...memoryMessages,
-      { role: 'user', content: message }
+      ...(history || [])
     ];
 
-    // GPT ответ
+    // 📡 GPT-запрос
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages,
@@ -71,22 +92,29 @@ module.exports = async (req, res) => {
     });
 
     let reply = response.choices[0].message.content;
+
+    // 🔍 Чистим от лишнего
     reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
     reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
 
-    // 💾 Сохраняем в Supabase
-    await supabase.from('messages').insert([
-      { user_id: userId, role: 'user', content: message },
-      { user_id: userId, role: 'assistant', content: reply }
+    // 💾 Сохраняем ответ Софии в Supabase
+    const insertAssistant = await supabase.from('messages').insert([
+      {
+        session_id: sessionId,
+        role: 'assistant',
+        content: reply,
+      }
     ]);
+
+    console.log('📦 Результат сохранения assistant-сообщения:', insertAssistant);
 
     res.json({ reply });
 
   } catch (error) {
-    console.error('GPT Error:', error);
-    res.status(500).json({ 
-      error: "София временно недоступна. Попробуйте позже 🌸",
-      details: error.message 
+    console.error('❌ GPT Error:', error);
+    res.status(500).json({
+      error: "София временно недоступна. Попробуйте задать вопрос позже 🌸",
+      details: error.message
     });
   }
 };
