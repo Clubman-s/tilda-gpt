@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
   const userMessage = message.text;
 
   const openai = new OpenAI({ apiKey: OPENAI_KEY });
-  const bot = new TelegramBot(TELEGRAM_TOKEN);
+  const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
   try {
     // 💾 Сохраняем сообщение пользователя в Supabase
