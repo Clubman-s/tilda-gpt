@@ -1,6 +1,12 @@
 const { OpenAI } = require('openai');
-const { supabase } = require('../lib/supabase');
-const { encoding_for_model } = require('tiktoken');
+const { createClient } = require('@supabase/supabase-js');
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,49 +17,20 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
 
   try {
-    const { message, session_id } = req.body;
-    const sessionId = session_id || 'demo-session';
+    const { message, userId = 'anonymous' } = req.body;
     if (!message) return res.status(400).json({ error: 'Message is required' });
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
-
-    await supabase.from('messages').insert([
-      { session_id: sessionId, role: 'user', content: message }
-    ]);
-
+    // 🧠 Загружаем последние 5 сообщений пользователя
     const { data: history } = await supabase
       .from('messages')
       .select('role, content')
-      .eq('session_id', sessionId)
-      .order('timestamp', { ascending: true });
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(5);
 
-    // 🧠 Получаем эмбеддинг вопроса
-    const embeddingRes = await openai.embeddings.create({
-      model: 'text-embedding-ada-002',
-      input: message,
-    });
-    const userEmbedding = embeddingRes.data[0].embedding;
+    const memoryMessages = history?.reverse() || [];
 
-    // 🔍 Semantic поиск в Supabase
-    const { data: chunks, error: chunksError } = await supabase.rpc('match_chunks', {
-      query_embedding: userEmbedding,
-      match_threshold: 0.75,
-      match_count: 5
-    });
-
-    if (chunksError) {
-      console.error('❌ Ошибка поиска чанков:', chunksError);
-    }
-
-    // 📚 Составляем текст из чанков
-    const contextText = (chunks || [])
-      .map(chunk => chunk.content)
-      .join('\n---\n')
-      .slice(0, 2000); // ограничим по символам
-
-    // ✅ Показываем, что реально подставляется в prompt
-    console.log('📚 Контекст из документов:', contextText.slice(0, 300));
-
+    // 🧾 Системный промпт
     const systemPrompt = `
 Ты — София, эксперт по госзакупкам с 8-летним опытом. Отвечай кратко, завершёнными фразами. Максимум — 300 токенов. Твой стиль:
 
@@ -62,15 +39,12 @@ module.exports = async (req, res) => {
 - Объясняй сложное просто: "Если по-простому, то..."
 - Допускай лёгкие эмоции: "О, это интересный случай! 😊"
 
-📚 Вот выдержки из загруженных документов, которые могут быть полезны:
-${contextText}
-
 🚫 Строгие запреты:
 - Никаких "как ИИ я", "моя база данных"
 - Не говори о документах/алгоритмах
 - Избегай бюрократического жаргона
 
-💡 Примеры ответов:
+💡 Примеры:
 - "По 44-ФЗ сроки составляют 10 дней ⏳"
 - "В судебной практике такой случай был... 👩⚖️"
 - "Давайте уточним детали вашей ситуации 💼"
@@ -81,9 +55,11 @@ ${contextText}
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...(history || [])
+      ...memoryMessages,
+      { role: 'user', content: message }
     ];
 
+    // GPT ответ
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages,
@@ -98,17 +74,19 @@ ${contextText}
     reply = reply.replace(/как (искусственный интеллект|ИИ|бот)/gi, '');
     reply = reply.replace(/согласно моим (данным|материалам)/gi, 'в практике');
 
+    // 💾 Сохраняем в Supabase
     await supabase.from('messages').insert([
-      { session_id: sessionId, role: 'assistant', content: reply }
+      { user_id: userId, role: 'user', content: message },
+      { user_id: userId, role: 'assistant', content: reply }
     ]);
 
     res.json({ reply });
 
   } catch (error) {
-    console.error('❌ GPT Error:', error);
-    res.status(500).json({
-      error: "София временно недоступна. Попробуйте задать вопрос позже 🌸",
-      details: error.message
+    console.error('GPT Error:', error);
+    res.status(500).json({ 
+      error: "София временно недоступна. Попробуйте позже 🌸",
+      details: error.message 
     });
   }
 };
