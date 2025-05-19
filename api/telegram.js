@@ -69,7 +69,7 @@ module.exports = async (req, res) => {
 
     // 🤖 Запрашиваем ответ у OpenAI
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4o-mini',
       messages,
       temperature: 0.7,
     });
